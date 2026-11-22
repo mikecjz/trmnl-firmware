@@ -211,16 +211,15 @@ implements that as `x4c_uc8279_partial_update()`:
 
 `display_update_epaper()` computes the dirty rectangle on-device by diffing the
 new framebuffer against the frame that is physically on the glass. The
-controller RAM cannot be read back (the X4C SPI bus has no MISO), so that frame
-is rebuilt from two sources:
-
-1. a same-boot copy kept by the transport (covers logo/message -> dashboard),
-2. the cached PNG named by `DisplayedImage`, decoded with the normal 1-bpp path.
-
-Both are accepted only when the rebuilt frame's FNV-1a hash equals the hash of
-the frame the transport last pushed to the panel. If neither matches (cold boot,
-lost cache, or a paint the transport cannot reproduce), the update falls back to
-the full OTP flash rather than risk a wrong partial.
+controller RAM cannot be read back (the X4C SPI bus has no MISO), and this build
+has PSRAM disabled, so a second framebuffer is not an option: the new frame is
+streamed to DTM2 first, and then the cached PNG named by `DisplayedImage` is
+decoded over the same framebuffer, diffing each row against the bytes still
+there before replacing them. `fb` therefore ends up holding the previous frame
+and is streamed to DTM1. The reconstructed frame's FNV-1a hash is checked
+against the hash of the frame the transport last pushed; a mismatch (or a failed
+decode) falls back to the OTP flash using the already-uploaded DTM2, so a wake
+logo, a message screen or a lost cache file can never produce a wrong partial.
 
 Full OTP flashes are kept for: the boot/first paint after a cold or software
 reset, `force_full_refresh` (the four bottom keys, see above),
