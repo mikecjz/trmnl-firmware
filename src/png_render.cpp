@@ -6,6 +6,8 @@
 #include <globals.h>
 #include <new>
 #include <png_render.h>
+#include <stdio.h>
+#include <string.h>
 #include <trmnl_log.h>
 
 #ifdef BOARD_XTEINK_X4_CLASSIC
@@ -423,7 +425,8 @@ int png_draw(PNGDRAW *pDraw) {
         if (g0 > g1) inv = 0xff;
       }
       const uint8_t *srcpx = pDraw->pPixels;
-      for (int i = 0; i < n; i++) fb[static_cast<size_t>(pDraw->y) * stride + i] = srcpx[i] ^ inv;
+      for (int i = 0; i < n; i++)
+        fb[static_cast<size_t>(pDraw->y) * stride + i] = srcpx[i] ^ inv;
     } else {
       // Any palette/grayscale/truecolor source -> 1 bpp, 1 = white, matching
       // the bb_epaper framebuffer convention.
@@ -704,8 +707,7 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
       return REFRESH_FULL;
 #endif // BOARD_TRMNL_4CLR
       bbep.setAddrWindow(0, 0, bbep.width(), bbep.height());
-      if (png->getBpp() == 1 ||
-          (png->getBpp() == 2 && png_count_colors(png, pPNG, iDataSize) == 2)
+      if (png->getBpp() == 1 || (png->getBpp() == 2 && png_count_colors(png, pPNG, iDataSize) == 2)
 #ifdef BOARD_XTEINK_X4_CLASSIC
           || x4c_uc8279_active() // mono panel: reduce any source to 1 bpp
 #endif
@@ -730,7 +732,7 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
           }
           bbep.fillScreen(BBEP_WHITE);
           s_x4c_buffer_draw = true;
-          iPlane = PNG_1_BIT;  // the X4C callback ignores the plane and emits 1 bpp
+          iPlane = PNG_1_BIT; // the X4C callback ignores the plane and emits 1 bpp
           png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
           png->decode(&iPlane, 0);
           s_x4c_buffer_draw = false;
@@ -813,3 +815,60 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
   delete (png); // free the decoder instance
   return rc;
 } /* png_to_epd() */
+
+#ifdef BOARD_XTEINK_X4_CLASSIC
+namespace {
+
+  struct X4cFbTarget {
+    uint8_t *fb;
+    int stride;
+    int height;
+  };
+
+  // Same 1-bpp reduction as the s_x4c_buffer_draw branch of png_draw(), but into
+  // a caller-owned buffer instead of the panel driver's framebuffer.
+  int png_draw_1bpp_fb(PNGDRAW *pDraw) {
+    X4cFbTarget *t = static_cast<X4cFbTarget *>(pDraw->pUser);
+    if (t == nullptr || t->fb == nullptr) return 0;
+    if (pDraw->y >= t->height) return 0;
+    int iWidth = pDraw->iWidth;
+    if (iWidth > t->stride * 8) iWidth = t->stride * 8;
+    const int n = (iWidth + 7) / 8;
+    uint8_t *d = t->fb + static_cast<size_t>(pDraw->y) * t->stride;
+    if (pDraw->iBpp == 1) { // already 1 bpp: only the palette polarity needs fixing
+      uint8_t inv = 0;
+      if (pDraw->iPixelType == PNG_PIXEL_INDEXED) {
+        const uint32_t g0 = pDraw->pPalette[0] + (pDraw->pPalette[1] << 2) + pDraw->pPalette[2];
+        const uint32_t g1 = pDraw->pPalette[3] + (pDraw->pPalette[4] << 2) + pDraw->pPalette[5];
+        if (g0 > g1) inv = 0xff;
+      }
+      const uint8_t *s = pDraw->pPixels;
+      for (int i = 0; i < n; i++)
+        d[i] = s[i] ^ inv;
+    } else {
+      uint8_t *tmp = bbep.getCache();
+      ReduceBpp(1, pDraw->iPixelType, pDraw->pPalette, pDraw->pPixels, tmp, iWidth, pDraw->iBpp);
+      memcpy(d, tmp, n);
+    }
+    return 1;
+  }
+
+} // namespace
+
+bool png_decode_to_1bpp(const uint8_t *pPNG, int iDataSize, uint8_t *fb, int stride, int height) {
+  if (pPNG == nullptr || fb == nullptr || stride <= 0 || height <= 0) return false;
+  memset(fb, 0xFF, static_cast<size_t>(stride) * height); // undrawn area is white
+  PNG *png = new (std::nothrow) PNG();
+  if (png == nullptr) return false;
+  X4cFbTarget target{fb, stride, height};
+  int rc = png->openRAM((uint8_t *)pPNG, iDataSize, png_draw_1bpp_fb);
+  bool ok = false;
+  if (rc == PNG_SUCCESS) {
+    rc = png->decode(&target, 0);
+    ok = rc == PNG_SUCCESS;
+  }
+  png->close();
+  delete png;
+  return ok;
+} /* png_decode_to_1bpp() */
+#endif // BOARD_XTEINK_X4_CLASSIC

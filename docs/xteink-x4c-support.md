@@ -112,7 +112,7 @@ How the manual refresh works:
    ext1 mask for the same reason; if none are released the wake is timer-only.
    The five levels and the armed mask are logged as
    `X4C: sleep: keys p3=… p5=… p2=… p8=… p9=… mask=… draws=…`, where `draws` is
-   the number of full panel updates in that boot.
+   the number of panel updates in that boot (partial and full together).
 2. `src/button.cpp` reads `esp_sleep_get_ext1_wakeup_status()` to learn which key
    woke the unit; that works even for a tap released before boot reaches the
    read. A bottom-key-only wake does not run the Power press-duration menu. A
@@ -127,9 +127,11 @@ How the manual refresh works:
    and cold boots still show the logo.
 5. `src/display_session.cpp` skips the "same filename as last wake, keep the
    screen" short-circuit, so the cached image is re-sent to the panel.
-6. `src/display.cpp` forces `REFRESH_FULL` for that wake. On the X4C the UC8279
-   path is already a full flash (`x4c_uc8279_full_update()`), so the flag mainly
-   documents intent and keeps the behaviour correct if partial updates are added.
+6. `src/display.cpp` forces `REFRESH_FULL` for that wake. The UC8279 path treats
+   that as an unconditional OTP flash (`x4c_uc8279_full_update()`), bypassing the
+   dirty-rect diff and the DU partial, and restarts the partial/ghosting counter
+   (`iUpdateCount = 0`). This is the one button path that is deliberately a
+   flash: bottom left / right / confirm / back (GPIO 5 / 2 / 8 / 9).
 
 The server names each PNG `screen-<sha256>-<changed>`, so the fetch after a
 button press is a real `/api/display` round-trip: a changed screen returns a new
@@ -191,6 +193,57 @@ through `src/x4c_uc8279.cpp` (called from `display_update_epaper()` and
 `display_wipe()`), so the dashboard path uses this sequence. The UC8179 profile
 still uses the generic `bb_epaper` path: it needs its own PLL/booster/VCOM
 bring-up and has not been validated on hardware.
+
+### Partial (DU) refresh
+
+A timer fetch used to repaint the whole panel through the OTP GC waveform, which
+is the ~1.46 s black/white flash. The UC8279 can instead run its built-in DU
+waveform, which only moves pixels whose old/new bit differs. `src/x4c_uc8279.cpp`
+implements that as `x4c_uc8279_partial_update()`:
+
+- DTM2 `0x13` <- new frame, DTM1 `0x10` <- the frame on the glass (both 600
+  rows, 120-gate offset).
+- CDI `0x50` `0xD7`, CCSET `0xE0` `0x02`, TSSET `0xE5` `0x5A` (DU waveform),
+  PFS `0x03` `0x20`, gate scan `0xE1` `0x02`, PON `0x04`, wait BUSY.
+- PTIN `0x91` + PTL `0x90` with the dirty rectangle (x byte-aligned, y shifted by
+  the 120-gate offset), PSR `0x00` `0x17` `0x4D`, DRF `0x12`, wait BUSY.
+- PTOUT `0x92`, POF `0x02`, wait BUSY.
+
+`display_update_epaper()` computes the dirty rectangle on-device by diffing the
+new framebuffer against the frame that is physically on the glass. The
+controller RAM cannot be read back (the X4C SPI bus has no MISO), so that frame
+is rebuilt from two sources:
+
+1. a same-boot copy kept by the transport (covers logo/message -> dashboard),
+2. the cached PNG named by `DisplayedImage`, decoded with the normal 1-bpp path.
+
+Both are accepted only when the rebuilt frame's FNV-1a hash equals the hash of
+the frame the transport last pushed to the panel. If neither matches (cold boot,
+lost cache, or a paint the transport cannot reproduce), the update falls back to
+the full OTP flash rather than risk a wrong partial.
+
+Full OTP flashes are kept for: the boot/first paint after a cold or software
+reset, `force_full_refresh` (the four bottom keys, see above),
+`maximum_compatibility`, every 8th paint (`iUpdateCount & 7`, the ghosting
+backstop), an invalid baseline, and any geometry or window the controller cannot
+drive partially.
+
+The partial is a differential drive, not a frame buffer replay: an unchanged
+pixel never moves, so there is no black/white inversion. The PTL window narrows
+the gate scan as well; a full-panel window is used when the changed region is
+unknown. The two 600-row plane uploads (~102 ms at 10 MHz) are unchanged and
+remain the fixed cost floor.
+
+Console verification, on the serial log of an automatic timer fetch:
+
+```
+X4C UC8279: mode=DU win=<w>x<h>@(<x>,<y>) upload=… pon=… drf=… pof=… total=…
+```
+
+`mode=DU` and `drf`/`total` well below the full-flash timing (~1240 ms /
+~1460 ms) confirm the partial path. A `mode=GC` line is a full flash (boot,
+`maximum_compatibility`, the every-8th backstop, or a lost previous frame).
+`win=` should be the size of the counter/region that changed, not 800x480.
 
 ## Open items that still need the unit
 
