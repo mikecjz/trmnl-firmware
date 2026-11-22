@@ -10,6 +10,10 @@ void pins_init(void) {
   io_conf.mode = GPIO_MODE_INPUT;
 #ifdef BOARD_TRMNL_X
   io_conf.pin_bit_mask = (1ULL << PIN_INTERRUPT);
+#elif defined(BOARD_XTEINK_X4_CLASSIC)
+  // Every wake key is an active-low input with a pull-up: Power plus the two
+  // side keys, which wake the unit for a manual fetch + hard refresh.
+  io_conf.pin_bit_mask = X4C_WAKE_KEY_MASK;
 #else
   io_conf.pin_bit_mask = (1ULL << pDevice->interrupt_pin);
 #endif

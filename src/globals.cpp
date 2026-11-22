@@ -18,6 +18,9 @@ char message_buffer[128]; // message to show on the screen
 bool status = false;      // need to download a new image
 bool reset_firmware = false; // need to reset credentials
 bool log_retry = false;      // need to log connection retry
+// Set for one wake when a physical refresh key (X4 Classic side keys) started it.
+// Not RTC: every boot starts false and only the button path turns it on.
+bool force_full_refresh = false;
 
 // --- Wake / sleep state ---
 unsigned long startup_time = 0;

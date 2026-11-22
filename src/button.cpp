@@ -11,6 +11,28 @@
 
 #include "trmnl_log.h"
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <esp_sleep.h>
+
+// The mask of RTC GPIOs that triggered the ext1 wake. Zero when this boot was not
+// a button wake (timer, cold boot), so the callers fall back to normal handling.
+static uint64_t x4c_wake_key_mask(void) {
+  if (wakeup_reason != ESP_SLEEP_WAKEUP_EXT1) {
+    return 0;
+  }
+  return esp_sleep_get_ext1_wakeup_status();
+}
+
+bool button_wake_came_from_refresh_key(void) { return (x4c_wake_key_mask() & X4C_REFRESH_KEY_MASK) != 0; }
+
+// A wake that was not a button wake at all counts as "not the refresh key", so the
+// power-button press-duration menu still runs for cold boots and timer wakes.
+bool button_wake_came_from_power_key(void) {
+  const uint64_t mask = x4c_wake_key_mask();
+  return mask == 0 || (mask & (1ULL << X4C_KEY_POWER_GPIO)) != 0;
+}
+#endif // BOARD_XTEINK_X4_CLASSIC
+
 static unsigned long wait_for_button_release(unsigned long start_time) {
   pinMode(pDevice->interrupt_pin, INPUT);
   while (digitalRead(pDevice->interrupt_pin) == LOW && millis() - start_time < BUTTON_SOFT_RESET_TIME) {

@@ -60,7 +60,9 @@ stock X4C flash, app `xteink_app v7.0.11`, board tag `ESP32S3_X4_CLA`).
 * `src/power/x4c_stat_power.cpp`: GPIO21 charge STAT (active HIGH) into the
   existing `ChargingStatus` path.
 * `include/config.h`: `X4C_SIDE_KEY_0_IS_UP`, the single side-key direction
-  define; it still needs one physical press before it is trusted.
+  define; it still needs one physical press before it is trusted. Also the
+  X4C button pin map and `X4C_REFRESH_KEY_MASK`, which selects the manual
+  refresh button (see below).
 * `docs/xteink-x4c-recovery.md`: ROM-loader recovery, full-flash backup and
   restore, merged/app-only flash offsets, back-to-stock.
 
@@ -82,6 +84,43 @@ bb_epaper's proven EP426 SSD1677 profile (the C3 X4's panel family), while
 base and load the X4C init tables from `src/x4c_panel.cpp` (ported from
 Papyrix's `Uc8179X4ProDriver` / `Uc8279X4ProDriver`; the UC8279 table omits the
 X4 Pro's PLL command, as the Classic does).
+
+## Manual refresh button (implemented)
+
+The X4 Classic has no OS and no touch panel: every button is a bare GPIO, so a
+button action can only be defined in firmware. There is nothing bound at a
+device or OS level to reuse.
+
+| Button | GPIO | Behaviour |
+|---|---|---|
+| Side up / side down | 0 / 7 | **Manual refresh**: wakes the unit, fetches `/api/display`, redraws with a forced full panel update |
+| Power | 3 | Wake + the existing press-duration menu (long press opens the settings portal, double click runs the server's special function) |
+| Bottom left / right / confirm / back | 5 / 2 / 8 / 9 | Wired and active low; not used by the dashboard yet |
+
+How the manual refresh works:
+
+1. `src/sleep_session.cpp` arms **ext1** on the RTC GPIO mask in
+   `X4C_WAKE_KEY_MASK` (power + both side keys) instead of ext0 on Power alone,
+   so a side-key press wakes the chip. `src/pins.cpp` gives every wake key a
+   pull-up.
+2. `src/button.cpp` reads `esp_sleep_get_ext1_wakeup_status()` to learn which key
+   woke the unit; that works even for a tap released before boot reaches the
+   read. A side-key-only wake does not run the Power press-duration menu.
+3. `src/wake_init.cpp` sets the `force_full_refresh` flag instead.
+4. `src/display_session.cpp` skips the "same filename as last wake, keep the
+   screen" short-circuit, so the cached image is re-sent to the panel.
+5. `src/display.cpp` forces `REFRESH_FULL` for that wake. On the X4C the UC8279
+   path is already a full flash (`x4c_uc8279_full_update()`), so the flag mainly
+   documents intent and keeps the behaviour correct if partial updates are added.
+
+The server names each PNG `screen-<sha256>-<changed>`, so the fetch after a
+button press is a real `/api/display` round-trip: a changed screen returns a new
+filename and downloads normally; an unchanged one keeps the same filename and is
+redrawn from flash.
+
+To bind the action to a different key, change `X4C_REFRESH_KEY_MASK` in
+`include/config.h`. The remaining keys are `X4C_KEY_LEFT_GPIO`,
+`X4C_KEY_RIGHT_GPIO`, `X4C_KEY_CONFIRM_GPIO` and `X4C_KEY_BACK_GPIO`.
 
 ## Battery and charger (implemented)
 

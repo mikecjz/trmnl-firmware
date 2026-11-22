@@ -107,6 +107,13 @@ static void enterSleep(bool keep_timer) {
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
 #ifdef BOARD_TRMNL_X
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
+#elif defined(BOARD_XTEINK_X4_CLASSIC)
+  // Power plus the two side keys, which are the manual refresh button: ext1 takes
+  // the RTC GPIO mask, so a press of any of them wakes the unit for a fetch.
+  pinMode(X4C_KEY_POWER_GPIO, INPUT_PULLUP);
+  pinMode(X4C_SIDE_UP_GPIO, INPUT_PULLUP);
+  pinMode(X4C_SIDE_DOWN_GPIO, INPUT_PULLUP);
+  esp_sleep_enable_ext1_wakeup_io(X4C_WAKE_KEY_MASK, ESP_EXT1_WAKEUP_ANY_LOW);
 #else
   esp_sleep_enable_ext0_wakeup((gpio_num_t)pDevice->interrupt_pin, 0);
 #endif
@@ -185,6 +192,11 @@ void goToSleepButtonOnly(void) {
 #elif CONFIG_IDF_TARGET_ESP32S3
 #ifdef BOARD_TRMNL_X
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
+#elif defined(BOARD_XTEINK_X4_CLASSIC)
+  pinMode(X4C_KEY_POWER_GPIO, INPUT_PULLUP);
+  pinMode(X4C_SIDE_UP_GPIO, INPUT_PULLUP);
+  pinMode(X4C_SIDE_DOWN_GPIO, INPUT_PULLUP);
+  esp_sleep_enable_ext1_wakeup_io(X4C_WAKE_KEY_MASK, ESP_EXT1_WAKEUP_ANY_LOW);
 #else
   esp_sleep_enable_ext0_wakeup((gpio_num_t)pDevice->interrupt_pin, 0);
 #endif

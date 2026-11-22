@@ -37,6 +37,7 @@ extern char message_buffer[128]; // message to show on the screen
 extern bool status;              // need to download a new image
 extern bool reset_firmware;      // need to reset credentials
 extern bool log_retry;           // need to log connection retry
+extern bool force_full_refresh;  // a button asked for a manual (hard) refresh this wake
 
 // --- Wake / sleep state ---
 extern unsigned long startup_time; // millis() at boot, for the wake time statistics

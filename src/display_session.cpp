@@ -513,12 +513,17 @@ https_request_err_e downloadAndShow(float batteryVoltage) {
   if (!status && result == HTTPS_SUCCESS) { // this means we already have this image stored in SPIFFS
     char szTemp[36];
     filesystem_fix_filename(apiDisplayResult.response.filename.c_str(), szTemp);
-    if (DisplayedImage::matches(szTemp)) {
+    if (DisplayedImage::matches(szTemp) && !force_full_refresh) {
       // We just displayed the same image, don't refresh the display
       Log.info("%s [%d]: The image hasn't changed since the last wakeup, don't refresh the display.\r\n", __FILE__,
                __LINE__);
       buffer = nullptr;
       return result;
+    }
+    if (DisplayedImage::matches(szTemp)) {
+      // Manual (hard) refresh: the content is unchanged, but the user pressed the
+      // refresh key, so re-send it with a forced full panel update below.
+      Log.info("%s [%d]: Manual refresh: redrawing the unchanged image with a full refresh\r\n", __FILE__, __LINE__);
     }
     if (!filesystem_file_exists(szTemp)) {
       // BMPs aren't cached under their filename (e.g. after a sleep special function); redraw /current.bmp

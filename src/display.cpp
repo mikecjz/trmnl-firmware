@@ -456,7 +456,13 @@ static void save_temp_profile_from_api(void) {
 // Adjusts the image's refresh mode for the refresh count, the server's settings and the panel
 static int choose_refresh_mode(int iRefreshMode, bool *pWait) {
   bool bWait = *pWait;
-  if ((iUpdateCount & 7) == 0 || apiDisplayResult.response.maximum_compatibility == true) {
+  if (force_full_refresh) {
+    // The refresh key was pressed: clear ghosting with one full panel refresh,
+    // even when the image is unchanged. display_session.cpp has already skipped
+    // the unchanged-image short-circuit for this wake.
+    Log_info("%s [%d]: Manual refresh: forcing full refresh\r\n", __FILE__, __LINE__);
+    iRefreshMode = REFRESH_FULL;
+  } else if ((iUpdateCount & 7) == 0 || apiDisplayResult.response.maximum_compatibility == true) {
     Log_info("%s [%d]: Forcing full refresh; desired refresh mode was: %d\r\n", __FILE__, __LINE__, iRefreshMode);
     iRefreshMode = REFRESH_FULL; // force full refresh every 8 partials
   }
