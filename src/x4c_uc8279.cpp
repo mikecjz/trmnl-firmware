@@ -42,6 +42,7 @@
 #include <esp_attr.h>
 #include <esp_log.h>
 #include <esp_task_wdt.h>
+#include <png_render.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -60,17 +61,12 @@ namespace {
 
   int s_sck = -1, s_mosi = -1, s_cs = -1, s_dc = -1, s_rst = -1, s_busy = -1;
 
-// RTC memory survives deep sleep, unlike the RAM shadow below. The e-paper
-// glass itself retains the last driven image with the panel unpowered, so this
-// hash is enough to say "the glass shows this frame" across a sleep cycle.
+// RTC memory survives deep sleep. The e-paper glass itself retains the last
+// driven image with the panel unpowered, so this hash is enough to say "the
+// glass shows this frame" across a sleep cycle without keeping a copy in RAM
+// (this build has PSRAM disabled, so a second framebuffer is not an option).
   RTC_DATA_ATTR uint32_t s_last_frame_hash = 0;
   RTC_DATA_ATTR bool s_baseline_valid = false;
-
-// Copy of the frame last pushed through the transport in THIS boot. Lets a
-// second paint in the same boot (logo -> dashboard, message -> dashboard) reuse
-// the true previous frame instead of falling back to a full flash.
-  uint8_t *s_last_frame = nullptr;
-  bool s_last_frame_ready = false;
 
   void out(const char *fmt, ...) {
     char line[192];
@@ -90,6 +86,11 @@ namespace {
       h *= 16777619u;
     }
     return h;
+  }
+
+  void noteFrameHash(uint32_t hash) {
+    s_last_frame_hash = hash;
+    s_baseline_valid = true;
   }
 
   void csLow() { digitalWrite(s_cs, LOW); }
@@ -174,20 +175,55 @@ namespace {
     return false;
   }
 
-  void noteFrame(const uint8_t *fb, int stride, int height) {
-    const size_t bytes = static_cast<size_t>(stride) * height;
-    s_last_frame_hash = fnv1a(fb, bytes);
-    s_baseline_valid = true;
-    if (s_last_frame == nullptr) {
-#ifdef CONFIG_SPIRAM
-      s_last_frame = static_cast<uint8_t *>(ps_malloc(bytes));
-#endif
-      if (s_last_frame == nullptr) s_last_frame = static_cast<uint8_t *>(malloc(bytes));
+// OTP GC trigger with DTM2 already holding the new frame and DTM1 the white
+// old-plane seed. Returns true when the waveform completed.
+  bool runFullTrigger(const char *tag, int stride, int height, uint32_t uploadMs, uint32_t t0) {
+    cmd(0x50);
+    data1(0x97);  // CDI, written on every refresh by stock
+    cmd(0xE0);
+    data1(0x02);  // CCSET
+    cmd(0xE5);
+    data1(0x1E);  // TSSET, full refresh
+    cmd(0x04);    // PON
+    uint32_t ponMs = 0;
+    const bool ponOk = waitIdle(kPonTimeoutMs, &ponMs);
+
+    cmd(0x00);
+    data1(0x17);
+    data1(0x4D);  // PSR rewrite between PON and DRF
+    cmd(0x12);    // DRF
+
+    const bool dropped = waitDropped(100);
+    uint32_t drfMs = 0;
+    const bool drfOk = waitIdle(kDrfTimeoutMs, &drfMs);
+
+    cmd(0x02);  // POF
+    uint32_t pofMs = 0;
+    const bool pofOk = waitIdle(kPofTimeoutMs, &pofMs);
+
+    const bool ok = ponOk && drfOk && pofOk;
+    out("UC8279 frame: mode=GC%s upload=%ums pon=%ums(%s) drop=%s drf=%ums(%s) pof=%ums(%s) total=%ums", tag,
+        (unsigned)uploadMs, (unsigned)ponMs, ponOk ? "ok" : "TIMEOUT", dropped ? "yes" : "NO", (unsigned)drfMs,
+        drfOk ? "ok" : "TIMEOUT", (unsigned)pofMs, pofOk ? "ok" : "TIMEOUT", (unsigned)(millis() - t0));
+    return ok;
+  }
+
+// Complete a full flash from a new frame already sitting in DTM2 (used when the
+// previous frame cannot be trusted, or a DU partial failed).
+  bool fullTriggerLoaded(uint32_t new_hash, int stride, int height) {
+    if (!setupBus()) return false;
+    const uint32_t t0 = millis();
+    SPI.beginTransaction(SPISettings(kSpiHz, MSBFIRST, SPI_MODE0));
+    streamPlane(0x10, nullptr, stride, height, true);  // DTM1 = white seed
+    const uint32_t uploadMs = millis() - t0;
+    const bool ok = runFullTrigger(" loaded", stride, height, uploadMs, t0);
+    SPI.endTransaction();
+    if (ok) {
+      noteFrameHash(new_hash);
+    } else {
+      x4c_uc8279_invalidate_baseline();
     }
-    if (s_last_frame != nullptr) {
-      memcpy(s_last_frame, fb, bytes);
-      s_last_frame_ready = true;
-    }
+    return ok;
   }
 
 }  // namespace
@@ -203,17 +239,7 @@ bool x4c_uc8279_baseline_valid() { return s_baseline_valid; }
 
 uint32_t x4c_uc8279_last_frame_hash() { return s_last_frame_hash; }
 
-bool x4c_uc8279_last_frame(uint8_t *dst, uint16_t width, uint16_t height) {
-  if (!s_baseline_valid || !s_last_frame_ready || s_last_frame == nullptr || dst == nullptr) return false;
-  if (width == 0 || height == 0 || (width % 8) != 0) return false;
-  memcpy(dst, s_last_frame, static_cast<size_t>(width / 8) * height);
-  return true;
-}
-
-void x4c_uc8279_invalidate_baseline() {
-  s_baseline_valid = false;
-  s_last_frame_ready = false;
-}
+void x4c_uc8279_invalidate_baseline() { s_baseline_valid = false; }
 
 bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height) {
   if (!x4c_uc8279_active() || fb == nullptr) return false;
@@ -261,6 +287,7 @@ bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height) 
 #endif
 
   if (!setupBus()) return false;
+  const uint32_t new_hash = fnv1a(fb, static_cast<size_t>(stride) * height);
 
 #ifdef X4C_FB_DUMP
   // One-shot compact fingerprint of the framebuffer: CRC32 per row. Small enough
@@ -289,74 +316,69 @@ bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height) 
   const uint32_t t0 = millis();
   SPI.beginTransaction(SPISettings(kSpiHz, MSBFIRST, SPI_MODE0));
 
-  streamPlane(0x13, fb, stride, height, false);       // DTM2 = new image
-  streamPlane(0x10, nullptr, stride, height, true);   // DTM1 = white seed
+  streamPlane(0x13, fb, stride, height, false);      // DTM2 = new image
+  streamPlane(0x10, nullptr, stride, height, true);  // DTM1 = white seed
   const uint32_t uploadMs = millis() - t0;
-
-  cmd(0x50);
-  data1(0x97);  // CDI, written on every refresh by stock
-  cmd(0xE0);
-  data1(0x02);  // CCSET
-  cmd(0xE5);
-  data1(0x1E);  // TSSET, full refresh
-  cmd(0x04);    // PON
-  uint32_t ponMs = 0;
-  const bool ponOk = waitIdle(kPonTimeoutMs, &ponMs);
-
-  cmd(0x00);
-  data1(0x17);
-  data1(0x4D);  // PSR rewrite between PON and DRF
-  cmd(0x12);    // DRF
-
-  const bool dropped = waitDropped(100);
-  uint32_t drfMs = 0;
-  const bool drfOk = waitIdle(kDrfTimeoutMs, &drfMs);
-
-  cmd(0x02);  // POF
-  uint32_t pofMs = 0;
-  const bool pofOk = waitIdle(kPofTimeoutMs, &pofMs);
+  const bool ok = runFullTrigger("", stride, height, uploadMs, t0);
 
   SPI.endTransaction();
 
-  const bool ok = ponOk && drfOk && pofOk;
-  out("UC8279 frame: mode=GC upload=%ums pon=%ums(%s) drop=%s drf=%ums(%s) pof=%ums(%s) total=%ums", (unsigned)uploadMs,
-      (unsigned)ponMs, ponOk ? "ok" : "TIMEOUT", dropped ? "yes" : "NO", (unsigned)drfMs, drfOk ? "ok" : "TIMEOUT",
-      (unsigned)pofMs, pofOk ? "ok" : "TIMEOUT", (unsigned)(millis() - t0));
   if (ok) {
-    noteFrame(fb, stride, height);
+    noteFrameHash(new_hash);
   } else {
     x4c_uc8279_invalidate_baseline();
   }
   return ok;
 }
 
-bool x4c_uc8279_partial_update(const uint8_t *fb, const uint8_t *prev, uint16_t width, uint16_t height,
-                               const X4cPartialWindow &win) {
-  if (!x4c_uc8279_active() || fb == nullptr || prev == nullptr) return false;
+X4cPartialResult x4c_uc8279_partial_update(uint8_t *fb, const uint8_t *prev_png, int prev_png_size, uint16_t width,
+                                           uint16_t height) {
+  if (!x4c_uc8279_active() || fb == nullptr || prev_png == nullptr || prev_png_size <= 0)
+    return X4cPartialResult::NotStarted;
   if (width != 800 || height == 0 || height > 480) {
     out("UC8279 partial: unsupported geometry %ux%u", (unsigned)width, (unsigned)height);
-    return false;
+    return X4cPartialResult::NotStarted;
   }
-  if (win.w == 0 || win.h == 0 || (win.x & 7) != 0 || (win.w & 7) != 0 ||
-      static_cast<uint32_t>(win.x) + win.w > width || static_cast<uint32_t>(win.y) + win.h > height) {
-    out("UC8279 partial: bad window %ux%u@(%u,%u)", (unsigned)win.w, (unsigned)win.h, (unsigned)win.x, (unsigned)win.y);
-    return false;
-  }
-
   const int stride = width / 8;
-  if (!setupBus()) return false;
+  const uint32_t new_hash = fnv1a(fb, static_cast<size_t>(stride) * height);
+  if (!setupBus()) return X4cPartialResult::NotStarted;
 
-  const uint16_t x0 = win.x;
-  const uint16_t x1 = static_cast<uint16_t>(win.x + win.w - 1);
-  const uint16_t y0 = static_cast<uint16_t>(kGateOffset + win.y);
-  const uint16_t y1 = static_cast<uint16_t>(kGateOffset + win.y + win.h - 1);
-
+  // Stream the new frame to DTM2 first: after this, `fb` is free scratch for
+  // the previous frame, so the diff needs no second framebuffer.
   const uint32_t t0 = millis();
   SPI.beginTransaction(SPISettings(kSpiHz, MSBFIRST, SPI_MODE0));
+  streamPlane(0x13, fb, stride, height, false);
+  uint32_t uploadMs = millis() - t0;
+  SPI.endTransaction();
 
-  streamPlane(0x13, fb, stride, height, false);    // DTM2 = new image
-  streamPlane(0x10, prev, stride, height, false);  // DTM1 = frame on the glass
-  const uint32_t uploadMs = millis() - t0;
+  // Rebuild the frame on the glass over `fb`, diffing each row as it is
+  // overwritten. The hash must match the frame this transport last painted;
+  // otherwise the "previous" image is not what the panel shows (wake logo, a
+  // message screen, a lost cache file) and a partial would corrupt it.
+  const uint32_t tDecode0 = millis();
+  X4cPrevFrame prev;
+  const bool decoded = png_decode_prev_frame(prev_png, prev_png_size, fb, stride, height, &prev);
+  const uint32_t decodeMs = millis() - tDecode0;
+  if (!decoded || !s_baseline_valid || prev.hash != s_last_frame_hash) {
+    out("UC8279 partial: previous frame %s; using the full flash",
+        !decoded ? "could not be decoded" : "does not match the panel");
+    return fullTriggerLoaded(new_hash, stride, height) ? X4cPartialResult::Done : X4cPartialResult::Failed;
+  }
+  if (!prev.any) {
+    noteFrameHash(new_hash);
+    out("UC8279 frame: mode=DU no-change decode=%ums total=%ums", (unsigned)decodeMs, (unsigned)(millis() - t0));
+    return X4cPartialResult::Done;
+  }
+
+  const uint16_t x0 = prev.x;
+  const uint16_t x1 = static_cast<uint16_t>(prev.x + prev.w - 1);
+  const uint16_t y0 = static_cast<uint16_t>(kGateOffset + prev.y);
+  const uint16_t y1 = static_cast<uint16_t>(kGateOffset + prev.y + prev.h - 1);
+
+  SPI.beginTransaction(SPISettings(kSpiHz, MSBFIRST, SPI_MODE0));
+  const uint32_t t1 = millis();
+  streamPlane(0x10, fb, stride, height, false);  // DTM1 = previous frame (now in fb)
+  uploadMs += millis() - t1;
 
   // Stock's built-in partial trigger order (RE of the factory FW): CDI first,
   // then CCSET/TSSET/PFS/gate-scan, PON, the PTIN/PTL window, then PSR.
@@ -403,17 +425,19 @@ bool x4c_uc8279_partial_update(const uint8_t *fb, const uint8_t *prev, uint16_t 
   SPI.endTransaction();
 
   const bool ok = ponOk && drfOk && pofOk;
-  out("UC8279 frame: mode=DU win=%ux%u@(%u,%u) upload=%ums pon=%ums(%s) drop=%s drf=%ums(%s) pof=%ums(%s) "
-      "total=%ums",
-      (unsigned)win.w, (unsigned)win.h, (unsigned)win.x, (unsigned)win.y, (unsigned)uploadMs, (unsigned)ponMs,
-      ponOk ? "ok" : "TIMEOUT", dropped ? "yes" : "NO", (unsigned)drfMs, drfOk ? "ok" : "TIMEOUT", (unsigned)pofMs,
-      pofOk ? "ok" : "TIMEOUT", (unsigned)(millis() - t0));
+  out("UC8279 frame: mode=DU win=%ux%u@(%u,%u) upload=%ums decode=%ums pon=%ums(%s) drop=%s drf=%ums(%s) "
+      "pof=%ums(%s) total=%ums",
+      (unsigned)prev.w, (unsigned)prev.h, (unsigned)prev.x, (unsigned)prev.y, (unsigned)uploadMs, (unsigned)decodeMs,
+      (unsigned)ponMs, ponOk ? "ok" : "TIMEOUT", dropped ? "yes" : "NO", (unsigned)drfMs, drfOk ? "ok" : "TIMEOUT",
+      (unsigned)pofMs, pofOk ? "ok" : "TIMEOUT", (unsigned)(millis() - t0));
   if (ok) {
-    noteFrame(fb, stride, height);
-  } else {
-    x4c_uc8279_invalidate_baseline();
+    noteFrameHash(new_hash);
+    return X4cPartialResult::Done;
   }
-  return ok;
+
+  x4c_uc8279_invalidate_baseline();
+  out("UC8279 partial: DU did not complete; retrying as a full flash");
+  return fullTriggerLoaded(new_hash, stride, height) ? X4cPartialResult::Done : X4cPartialResult::Failed;
 }
 
 #endif  // BOARD_XTEINK_X4_CLASSIC && !PARALLEL_EPD

@@ -24,23 +24,22 @@ bool x4c_uc8279_active();
 // unsupported or a BUSY wait times out.
 bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height);
 
-// A rectangle of the visible 480-row image. x and w must be byte aligned
-// (multiples of 8); the transport adds the panel's 120-gate visible offset.
-struct X4cPartialWindow {
-  uint16_t x;
-  uint16_t y;
-  uint16_t w;
-  uint16_t h;
+// Outcome of x4c_uc8279_partial_update().
+enum class X4cPartialResult : uint8_t {
+  Done,        // panel is up to date (a DU partial ran, or nothing had changed)
+  NotStarted,  // nothing was written; `fb` is intact and the caller may full-flash it
+  Failed,      // the panel was touched but the update did not complete
 };
 
-// Blocking differential update: `prev` is the frame currently on the glass and
-// `fb` the new frame. Both go through the normal 600-row upload (DTM1/DTM2);
-// the refresh itself is restricted to `win` with the DU waveform, so unchanged
-// pixels do not move and there is no black/white flash. The caller must have a
-// frame that matches the glass; pass the full panel as the window when the
-// dirty rectangle is unknown.
-bool x4c_uc8279_partial_update(const uint8_t *fb, const uint8_t *prev, uint16_t width, uint16_t height,
-                               const X4cPartialWindow &win);
+// Blocking differential update. `prev_png` is a cached PNG of the frame on the
+// glass; `fb` holds the new frame and is used as scratch: the new frame is
+// streamed to DTM2 first, then the PNG is decoded over `fb` while each row is
+// diffed against the bytes still there, so no second framebuffer is needed.
+// The changed bounding box is driven with the DU waveform (PTIN/PTL). On a
+// decode/hash mismatch or a failed partial it completes with the OTP GC flash
+// from the already-uploaded DTM2, which is still correct.
+X4cPartialResult x4c_uc8279_partial_update(uint8_t *fb, const uint8_t *prev_png, int prev_png_size, uint16_t width,
+                                           uint16_t height);
 
 // True when the last update through this transport succeeded, so the frame
 // identified by last_frame_hash() is what the glass shows.
@@ -51,11 +50,6 @@ uint32_t x4c_uc8279_frame_hash(const uint8_t *fb, uint16_t width, uint16_t heigh
 
 // Hash of the last frame successfully pushed through the transport.
 uint32_t x4c_uc8279_last_frame_hash();
-
-// Copy the last frame pushed through the transport into `dst`, when it is still
-// in RAM (same boot). Returns false after a deep-sleep cycle, where the caller
-// has to rebuild the frame from the cached image instead.
-bool x4c_uc8279_last_frame(uint8_t *dst, uint16_t width, uint16_t height);
 
 // Forget the baseline: the next update must be a full OTP flash.
 void x4c_uc8279_invalidate_baseline();

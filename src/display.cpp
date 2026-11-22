@@ -99,70 +99,20 @@ static void display_apply_light_sleep(uint8_t enabled) {
 }
 
 #ifdef BOARD_XTEINK_X4_CLASSIC
-// Previous-frame scratch for the UC8279 diff (800x480 at 1 bpp).
-static uint8_t *s_x4c_prev_frame = nullptr;
-
-static uint8_t *x4c_prev_frame_buffer(size_t bytes) {
-  if (s_x4c_prev_frame == nullptr) {
-#ifdef CONFIG_SPIRAM
-    s_x4c_prev_frame = static_cast<uint8_t *>(ps_malloc(bytes));
-#endif
-    if (s_x4c_prev_frame == nullptr) s_x4c_prev_frame = static_cast<uint8_t *>(malloc(bytes));
-  }
-  return s_x4c_prev_frame;
-}
-
-// Rebuild the frame that is physically on the glass. The UC8279 RAM cannot be
-// read back over this 4-wire bus (no MISO), but the e-paper keeps the image and
-// DisplayedImage remembers which cached image produced it. The hash check is
-// what makes this safe: it only returns true when the rebuilt frame is exactly
-// the frame this transport last pushed, so a logo/message/wipe painted since
-// then (or a lost cache file) falls back to a full flash.
-static bool x4c_rebuild_previous_frame(uint8_t *dst, uint16_t width, uint16_t height) {
-  if (!x4c_uc8279_baseline_valid()) return false;
+// True when the cached image of the frame on the glass can be handed to the
+// UC8279 partial transport. The transport rebuilds and diffs it on-device, so
+// this build (PSRAM disabled) needs no second framebuffer here.
+static uint8_t *x4c_load_previous_png(int *size) {
+  *size = 0;
   const char *path = DisplayedImage::get();
-  if (path == nullptr || path[0] == '\0') return false;
-  int size = 0;
-  uint8_t *png = display_read_file(path, &size);
-  if (png == nullptr || size <= 0) {
+  if (path == nullptr || path[0] == '\0') return nullptr;
+  uint8_t *png = display_read_file(path, size);
+  if (png == nullptr || *size <= 0) {
     if (png != nullptr) free(png);
-    return false;
+    *size = 0;
+    return nullptr;
   }
-  const bool decoded = png_decode_to_1bpp(png, size, dst, width / 8, height);
-  free(png);
-  if (!decoded) return false;
-  return x4c_uc8279_frame_hash(dst, width, height) == x4c_uc8279_last_frame_hash();
-}
-
-// Bounding box of the pixels that differ, byte-aligned for the PTL window.
-// Returns false when the frames are identical (nothing to drive).
-static bool x4c_dirty_window(const uint8_t *fb, const uint8_t *prev, uint16_t width, uint16_t height,
-                             X4cPartialWindow *win) {
-  const int stride = width / 8;
-  int y0 = -1, y1 = -1, bx0 = -1, bx1 = -1;
-  for (int y = 0; y < height; y++) {
-    const uint8_t *a = prev + static_cast<size_t>(y) * stride;
-    const uint8_t *b = fb + static_cast<size_t>(y) * stride;
-    int first = -1, last = -1;
-    for (int i = 0; i < stride; i++) {
-      if (a[i] != b[i]) {
-        if (first < 0) first = i;
-        last = i;
-      }
-    }
-    if (first >= 0) {
-      if (y0 < 0) y0 = y;
-      y1 = y;
-      if (bx0 < 0 || first < bx0) bx0 = first;
-      if (last > bx1) bx1 = last;
-    }
-  }
-  if (y0 < 0) return false;
-  win->x = static_cast<uint16_t>(bx0 * 8);
-  win->w = static_cast<uint16_t>((bx1 - bx0 + 1) * 8);
-  win->y = static_cast<uint16_t>(y0);
-  win->h = static_cast<uint16_t>(y1 - y0 + 1);
-  return true;
+  return png;
 }
 #endif // BOARD_XTEINK_X4_CLASSIC
 
@@ -171,7 +121,7 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
   // The X4C UC8279 needs a gate-offset-aware upload plus an explicit old plane
   // and the reference trigger sequence; bb_epaper's generic path cannot do it.
   if (x4c_uc8279_active()) {
-    const uint8_t *fb = static_cast<const uint8_t *>(bbep.getBuffer());
+    uint8_t *fb = static_cast<uint8_t *>(bbep.getBuffer());
     if (fb == nullptr) {
       Log_error("display_update_epaper: no framebuffer");
       return false;
@@ -183,24 +133,22 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
     // server's maximum_compatibility, the boot/first paint and the every-Nth
     // ghosting backstop (choose_refresh_mode() turns all of those into
     // REFRESH_FULL). Everything else is a non-flashing DU partial over the
-    // changed bounding box.
+    // changed bounding box; the transport rebuilds the previous frame from the
+    // cached image and diffs it on-device.
     const bool force_full = refreshMode == REFRESH_FULL || force_full_refresh || !x4c_uc8279_baseline_valid();
     bool ok = false;
+    bool fb_intact = true;  // the partial transport overwrites `fb` once it starts
     if (!force_full) {
-      uint8_t *prev = x4c_prev_frame_buffer(static_cast<size_t>(w / 8) * h);
-      bool have_prev = prev != nullptr && x4c_uc8279_last_frame(prev, w, h);
-      if (!have_prev && prev != nullptr) have_prev = x4c_rebuild_previous_frame(prev, w, h);
-      if (have_prev) {
-        X4cPartialWindow win;
-        if (x4c_dirty_window(fb, prev, w, h, &win)) {
-          ok = x4c_uc8279_partial_update(fb, prev, w, h, win);
-        } else {
-          Log_info("X4C: frame unchanged, skipping the panel update");
-          ok = true;
-        }
+      int size = 0;
+      uint8_t *prev_png = x4c_load_previous_png(&size);
+      if (prev_png != nullptr) {
+        const X4cPartialResult result = x4c_uc8279_partial_update(fb, prev_png, size, w, h);
+        if (result == X4cPartialResult::Failed) fb_intact = false;
+        ok = result == X4cPartialResult::Done;
+        free(prev_png);
       }
     }
-    if (!ok) {
+    if (!ok && fb_intact) {
       // No trustworthy previous frame (boot, lost cache, wake logo): the
       // controller cannot diff, so take the flash rather than risk corruption.
       ok = x4c_uc8279_full_update(fb, w, h);
