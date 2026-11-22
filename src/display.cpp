@@ -141,7 +141,11 @@ static void display_select_one_bit_panel(bool only_if_changed = false) {
     return;
   }
   if (custom_pins) {
-    bbep.setPanelType(one_bit);
+    // display_set_panel_type(), not bbep.setPanelType(): the latter restores
+    // bb_epaper's generic init table, which overwrites the X4C UC8279 init
+    // (TRES 800x600, GSST, PSR) and makes the controller scan our 600-row
+    // gate-120 stream twice.
+    display_set_panel_type(one_bit);
     bbep.initIO(pDevice->epd_dc_pin, pDevice->epd_rst_pin, pDevice->epd_busy_pin, pDevice->epd_cs_pin,
                 pDevice->epd_mosi_pin, pDevice->epd_sck_pin, 8000000);
   } else {
