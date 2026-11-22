@@ -221,6 +221,15 @@ against the hash of the frame the transport last pushed; a mismatch (or a failed
 decode) falls back to the OTP flash using the already-uploaded DTM2, so a wake
 logo, a message screen or a lost cache file can never produce a wrong partial.
 
+Do not add a 48 KB shadow or previous-frame buffer here. The image path already
+allocates the 48 KB 1-bpp framebuffer after Wi-Fi starts, and a 48 KB
+allocation that fails leaves the panel showing whatever was there before (the
+X4C build reports `X4C: no framebuffer for PNG decode` in its stored log). The
+previous PNG is therefore snapshotted into a static 16 KB buffer *before* the
+new image is decoded, so the ~43 KB PNG decoder for the rebuild can reuse the
+block the new-image decode just freed without a small heap allocation
+fragmenting it.
+
 Full OTP flashes are kept for: the boot/first paint after a cold or software
 reset, `force_full_refresh` (the four bottom keys, see above),
 `maximum_compatibility`, every 8th paint (`iUpdateCount & 7`, the ghosting

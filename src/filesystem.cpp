@@ -102,6 +102,15 @@ bool filesystem_read_from_file(const char *name, uint8_t *out_buffer, size_t siz
   }
 }
 
+int filesystem_file_size(const char *name) {
+  if (!FS.exists(name)) return -1;
+  File file = FS.open(name, FILE_READ);
+  if (!file) return -1;
+  const int size = static_cast<int>(file.size());
+  file.close();
+  return size;
+}
+
 /**
  * @brief Function to delete old versions of plugin images (by comparing the timestamp)
  *        It also deletes files that are older than 24h to keep SPIFFS from filling up

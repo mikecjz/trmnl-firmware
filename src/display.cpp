@@ -99,20 +99,25 @@ static void display_apply_light_sleep(uint8_t enabled) {
 }
 
 #ifdef BOARD_XTEINK_X4_CLASSIC
-// True when the cached image of the frame on the glass can be handed to the
-// UC8279 partial transport. The transport rebuilds and diffs it on-device, so
-// this build (PSRAM disabled) needs no second framebuffer here.
-static uint8_t *x4c_load_previous_png(int *size) {
-  *size = 0;
+// Snapshot of the cached image that produced the frame on the glass. It is
+// read BEFORE the new image is decoded, into static memory on purpose: the
+// ~43 KB PNG decoder the partial transport needs later must be able to reuse
+// the block the new-image decode just freed, without a small heap allocation
+// (or a second framebuffer) fragmenting it. This build has PSRAM disabled, and
+// a 48 KB allocation failing here is what left the panel blank on the first
+// cut of this change.
+static uint8_t s_x4c_prev_png[16384];
+static int s_x4c_prev_png_size = 0;
+
+static void x4c_preload_previous_png(void) {
+  s_x4c_prev_png_size = 0;
+  if (!x4c_uc8279_baseline_valid()) return; // the first paint is a full flash
   const char *path = DisplayedImage::get();
-  if (path == nullptr || path[0] == '\0') return nullptr;
-  uint8_t *png = display_read_file(path, size);
-  if (png == nullptr || *size <= 0) {
-    if (png != nullptr) free(png);
-    *size = 0;
-    return nullptr;
-  }
-  return png;
+  if (path == nullptr || path[0] == '\0') return;
+  const int size = filesystem_file_size(path);
+  if (size <= 0 || size > static_cast<int>(sizeof(s_x4c_prev_png))) return;
+  if (!filesystem_read_from_file(path, s_x4c_prev_png, static_cast<size_t>(size))) return;
+  s_x4c_prev_png_size = size;
 }
 #endif // BOARD_XTEINK_X4_CLASSIC
 
@@ -138,16 +143,12 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
     const bool force_full = refreshMode == REFRESH_FULL || force_full_refresh || !x4c_uc8279_baseline_valid();
     bool ok = false;
     bool fb_intact = true;  // the partial transport overwrites `fb` once it starts
-    if (!force_full) {
-      int size = 0;
-      uint8_t *prev_png = x4c_load_previous_png(&size);
-      if (prev_png != nullptr) {
-        const X4cPartialResult result = x4c_uc8279_partial_update(fb, prev_png, size, w, h);
-        if (result == X4cPartialResult::Failed) fb_intact = false;
-        ok = result == X4cPartialResult::Done;
-        free(prev_png);
-      }
+    if (!force_full && s_x4c_prev_png_size > 0) {
+      const X4cPartialResult result = x4c_uc8279_partial_update(fb, s_x4c_prev_png, s_x4c_prev_png_size, w, h);
+      if (result == X4cPartialResult::Failed) fb_intact = false;
+      ok = result == X4cPartialResult::Done;
     }
+    s_x4c_prev_png_size = 0; // the snapshot is consumed by one paint
     if (!ok && fb_intact) {
       // No trustworthy previous frame (boot, lost cache, wake logo): the
       // controller cannot diff, so take the flash rather than risk corruption.
@@ -607,7 +608,15 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait, bool b
 
   Log_info("display_show_image start");
   Log_info("maximum_compatibility = %d\n", apiDisplayResult.response.maximum_compatibility);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // Read the previous image before the new PNG decoder takes the heap, so the
+  // partial path can reuse that same block afterwards (see x4c_preload_previous_png).
+  x4c_preload_previous_png();
+#endif
   if (!draw_image(image_buffer, data_size, &iRefreshMode, &bAlloc)) {
+#ifdef BOARD_XTEINK_X4_CLASSIC
+    s_x4c_prev_png_size = 0;
+#endif
     return;
   }
   Log_info("Display refresh start");
