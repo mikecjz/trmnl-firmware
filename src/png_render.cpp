@@ -8,6 +8,14 @@
 #include <png_render.h>
 #include <trmnl_log.h>
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_uc8279.h>
+// When set, png_draw() writes decoded rows into the bb_epaper framebuffer
+// instead of streaming them straight to the controller. The X4C transport
+// needs a full 800x480 frame to apply the 600-row / gate-120 upload.
+static bool s_x4c_buffer_draw = false;
+#endif
+
 enum {
   PNG_1_BIT = 0,
   PNG_1_BIT_INVERTED,
@@ -401,6 +409,31 @@ int png_draw(PNGDRAW *pDraw) {
       } // for x
     }
   }
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  if (s_x4c_buffer_draw) {
+    uint8_t *fb = static_cast<uint8_t *>(bbep.getBuffer());
+    const int stride = (bbep.width() + 7) / 8;
+    const int n = (iWidth + 7) / 8;
+    if (fb == nullptr || pDraw->y >= bbep.height()) return 1;
+    if (pDraw->iBpp == 1) {
+      uint8_t inv = 0;
+      if (pDraw->iPixelType == PNG_PIXEL_INDEXED) {
+        const uint32_t g0 = pDraw->pPalette[0] + (pDraw->pPalette[1] << 2) + pDraw->pPalette[2];
+        const uint32_t g1 = pDraw->pPalette[3] + (pDraw->pPalette[4] << 2) + pDraw->pPalette[5];
+        if (g0 > g1) inv = 0xff;
+      }
+      const uint8_t *srcpx = pDraw->pPixels;
+      for (int i = 0; i < n; i++) fb[static_cast<size_t>(pDraw->y) * stride + i] = srcpx[i] ^ inv;
+    } else {
+      // Any palette/grayscale/truecolor source -> 1 bpp, 1 = white, matching
+      // the bb_epaper framebuffer convention.
+      uint8_t *tmp = bbep.getCache();
+      ReduceBpp(1, pDraw->iPixelType, pDraw->pPalette, pDraw->pPixels, tmp, iWidth, pDraw->iBpp);
+      memcpy(fb + static_cast<size_t>(pDraw->y) * stride, tmp, n);
+    }
+    return 1;
+  }
+#endif
   bbep.writeData(pTemp, (iWidth + 7) / 8);
   return 1;
 } /* png_draw() */
@@ -672,7 +705,11 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
 #endif // BOARD_TRMNL_4CLR
       bbep.setAddrWindow(0, 0, bbep.width(), bbep.height());
       if (png->getBpp() == 1 ||
-          (png->getBpp() == 2 && png_count_colors(png, pPNG, iDataSize) == 2)) { // 1-bit image (single plane)
+          (png->getBpp() == 2 && png_count_colors(png, pPNG, iDataSize) == 2)
+#ifdef BOARD_XTEINK_X4_CLASSIC
+          || x4c_uc8279_active() // mono panel: reduce any source to 1 bpp
+#endif
+      ) { // 1-bit image (single plane)
         png->close(); // use a different PNGDraw callback for color matching
         if (pDevice->epd_mosi_pin != 0 || pDevice->epd_sck_pin != 0) {
           display_set_panel_type(dpList[active_panel_set_index()][iTempProfile].OneBit);
@@ -680,6 +717,28 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
           bbep.begin(dpList[active_panel_set_index()][0].OneBit);
         }
         rc = REFRESH_PARTIAL; // the new image is 1bpp - try a partial update
+#ifdef BOARD_XTEINK_X4_CLASSIC
+        // X4C: decode into the framebuffer; x4c_uc8279_full_update() then
+        // uploads it with the 600-row / gate-120 geometry. Streaming directly
+        // to the controller leaves no framebuffer and no gate offset.
+        if (x4c_uc8279_active()) {
+          esp_log_write(ESP_LOG_WARN, "X4C", "png: srcBpp=%d colors=%d\n", png->getBpp(),
+                        png->getBpp() == 2 ? png_count_colors(png, pPNG, iDataSize) : 0);
+          if (bbep.allocBuffer(false) != BBEP_SUCCESS) {
+            Log_error("X4C: no framebuffer for PNG decode");
+            return -1;
+          }
+          bbep.fillScreen(BBEP_WHITE);
+          s_x4c_buffer_draw = true;
+          iPlane = PNG_1_BIT;  // the X4C callback ignores the plane and emits 1 bpp
+          png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
+          png->decode(&iPlane, 0);
+          s_x4c_buffer_draw = false;
+          png->close();
+          delete (png);
+          return REFRESH_PARTIAL;
+        }
+#endif
         bbep.startWrite(PLANE_0); // start writing image data to plane 0
         png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
         if (png->getBpp() == 1 || png->getBpp() > 2) {

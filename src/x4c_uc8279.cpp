@@ -26,6 +26,7 @@
 #include <SPI.h>
 #include <board_config.h>
 #include <esp_log.h>
+#include <esp_task_wdt.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -136,19 +137,25 @@ bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height) 
   pinMode(s_busy, INPUT);
 
 #ifdef X4C_FB_DUMP
-  // One-shot framebuffer dump for comparing the source image against the glass.
-  static int dumps_left = 2;
+  // One-shot compact fingerprint of the framebuffer: CRC32 per row. Small enough
+  // not to trip the task watchdog, and enough to see whether the source image is
+  // duplicated (repeated row-hash sequences) before it reaches the panel.
+  static int dumps_left = 10;
   if (dumps_left > 0) {
     dumps_left--;
-    out("FB begin %ux%u stride=%d total=%u", (unsigned)width, (unsigned)height, stride,
+    out("FBROWS begin %ux%u stride=%d total=%u", (unsigned)width, (unsigned)height, stride,
         (unsigned)(stride * height));
     for (int y = 0; y < height; y++) {
-      char line[64 + 3 * 100];
-      int n = snprintf(line, sizeof(line), "FB %03d ", y);
-      for (int i = 0; i < stride; i++) n += snprintf(line + n, sizeof(line) - n, "%02x", fb[y * stride + i]);
-      esp_log_write(ESP_LOG_ERROR, "X4C", "%s\n", line);
+      uint32_t crc = 0xffffffffu;
+      const uint8_t *row = fb + static_cast<size_t>(y) * stride;
+      for (int i = 0; i < stride; i++) {
+        crc ^= row[i];
+        for (int b = 0; b < 8; b++) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+      }
+      esp_log_write(ESP_LOG_ERROR, "X4C", "FBROW %03d %08x\n", y, (unsigned)(~crc));
+      if ((y & 31) == 31) esp_task_wdt_reset();
     }
-    out("FB end");
+    out("FBROWS end");
   }
 #endif
 

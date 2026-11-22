@@ -38,6 +38,8 @@ void ensureDeviceSetUp(void) {
 
     // attempt to get the API key and friendly ID
     DeviceSetupResult setup = deviceSetup().perform();
+    esp_log_write(ESP_LOG_WARN, "X4C", "setup: outcome=%d sleep=%d errScreen=%d\n", (int)setup.outcome,
+                  (int)setup.shouldGoToSleep, (int)setup.errorScreen);
 
     // copy results into globals
     setup.imageUrl.toCharArray(filename, sizeof(filename));

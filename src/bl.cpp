@@ -20,6 +20,7 @@
 // Fetches the screen from /api/display, shows it (or the error), then handles what the response asks for
 static void showScreen(bool should_show_error_now) {
   https_request_err_e request_result = downloadAndShow(battery_voltage);
+  esp_log_write(ESP_LOG_WARN, "X4C", "showScreen: request result %d\n", (int)request_result);
   Log.info("%s [%d]: request result - %s\r\n", __FILE__, __LINE__, https_request_err_str(request_result));
   showImageTooBigIfNeeded(request_result);
   applyRetryPolicy(request_result, should_show_error_now); // may sleep
