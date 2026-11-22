@@ -1,39 +1,54 @@
-// X4C panel-only test build (-D X4C_PANEL_TEST).
+// X4C panel-only diagnostic build (-D X4C_PANEL_TEST).
 //
-// Initialises ONLY the display through the shipping driver path (board config,
-// 0x70 controller probe, X4C UC81xx init table, bb_epaper), draws an 800x480
-// alignment pattern and does one full refresh. No filesystem, network, server,
-// sleep or OTA code runs, and nothing is written to the panel outside the
-// normal full-refresh image.
+// Drives the UC8279 directly with the sequence from CrossPoint's validated
+// Uc8279X4Driver (freeink-sdk), because the bb_epaper generic UC81xx path is
+// wrong for this glass in two ways:
 //
-// The pattern is designed to be verified by eye:
-//   * 4 px black frame on all four edges -> cropping or a shifted origin is
-//     immediately visible as a missing/broken border
-//   * filled 16 px corner squares and a centre cross
-//   * 50 px ruler ticks along the top and left edges
-//   * diagonals corner-to-corner -> square pixels and no line-shear
-//   * text markers: left/right key labels and the controller name
+//   1. It never loads the pixel planes unless writePlane() is called; refresh()
+//      alone sends init + DRF and leaves the controller RAM undefined.
+//   2. The panel is addressed as 800x600 with the visible 480 gates starting at
+//      gate 120. Plane uploads must be 120 white rows + 480 image rows (600
+//      total, 100 bytes/row); bb_epaper streams only 480 rows from gate 0.
 //
-// Keys are polled after the refresh and logged so a single press can be
-// attributed to GPIO0 (left/previous) or GPIO7 (right/next).
+// The reference full-refresh trigger order is used verbatim: DTM2 (new image),
+// DTM1 (white seed), CDI 0x50/0x97, CCSET 0xE0/0x02, TSSET 0xE5/0x1E, PON,
+// wait BUSY (idle = HIGH), PSR rewrite 0x00/0x17/0x4D, DRF 0x12, wait BUSY,
+// POF 0x02. No custom LUT: the OTP GC waveform is used.
+//
+// Boot sequence: BLACK full refresh -> WHITE full refresh -> alignment pattern,
+// then repeat, with 8 s / 8 s / 20 s dwell so the result can be photographed at
+// any time. Side keys (GPIO0 left, GPIO7 right) are logged continuously.
 
 #include <Arduino.h>
-#include <bb_epaper.h>
-#include <epd_driver.h>
+#include <SPI.h>
+#include <driver/gpio.h>
 #include <esp_log.h>
 #include <stdarg.h>
 #include <stdio.h>
-
-#include "display.h"
-#include "x4c_panel.h"
+#include <string.h>
 
 #if defined(X4C_PANEL_TEST)
 
 namespace {
 
+constexpr int PIN_SCLK = 12;
+constexpr int PIN_MOSI = 11;
+constexpr int PIN_CS = 13;
+constexpr int PIN_DC = 14;
+constexpr int PIN_RST = 10;
+constexpr int PIN_BUSY = 18;
 constexpr int PIN_PANEL_POWER = 1;
 constexpr int PIN_KEY_LEFT = 0;   // side key, up/previous
 constexpr int PIN_KEY_RIGHT = 7;  // side key, down/next
+
+constexpr uint32_t SPI_HZ = 10000000;  // reference uses 10 MHz on this panel
+constexpr int W = 800;
+constexpr int H = 480;
+constexpr int STRIDE = W / 8;  // 100 bytes
+constexpr int TRES_H = 600;    // addressed gate count
+constexpr int GATE_OFFSET = 120;  // first visible gate line
+
+uint8_t g_fb[STRIDE * H];  // 48000 bytes, 1 bpp, bit 1 = white
 
 void out(const char *fmt, ...) {
   char line[256];
@@ -44,125 +59,261 @@ void out(const char *fmt, ...) {
   esp_log_write(ESP_LOG_ERROR, "X4C", "%s\n", line);
 }
 
-}  // namespace
+// ---- bit-banged control over the SPI bus -------------------------------
 
-void x4c_panel_test_run() {
-  delay(200);
+void csLow() { digitalWrite(PIN_CS, LOW); }
+void csHigh() { digitalWrite(PIN_CS, HIGH); }
 
-  // Master peripheral/panel rail, active HIGH (CrossPoint X4C profile).
-  pinMode(PIN_PANEL_POWER, OUTPUT);
-  digitalWrite(PIN_PANEL_POWER, HIGH);
-  delay(100);
+void cmd(uint8_t c) {
+  digitalWrite(PIN_DC, LOW);
+  csLow();
+  SPI.transfer(c);
+  csHigh();
+}
 
-  out("=== X4C PANEL-ONLY TEST: display driver path only ===");
-  out("build: 800x480, controller resolved by 0x70 probe");
+void data1(uint8_t d) {
+  digitalWrite(PIN_DC, HIGH);
+  csLow();
+  SPI.transfer(d);
+  csHigh();
+}
 
-  display_init();
-  const uint16_t w = display_width();
-  const uint16_t h = display_height();
-  out("display_init ok: %ux%u controller=%s", (unsigned)w, (unsigned)h,
-      x4c_panel_name(x4c_active_panel()));
-
-  bbep.setMemoryMode(BBEP_MODE_1BPP);
-  const int alloc = bbep.allocBuffer(false);
-  out("allocBuffer rc=%d width=%u height=%u", alloc, (unsigned)bbep.width(),
-      (unsigned)bbep.height());
-
-  bbep.fillScreen(BBEP_WHITE);
-
-  // Frame: every edge, 4 px.
-  bbep.fillRect(0, 0, w, 4, BBEP_BLACK);
-  bbep.fillRect(0, h - 4, w, 4, BBEP_BLACK);
-  bbep.fillRect(0, 0, 4, h, BBEP_BLACK);
-  bbep.fillRect(w - 4, 0, 4, h, BBEP_BLACK);
-
-  // Corner squares, 16 px, inset by the frame.
-  bbep.fillRect(4, 4, 16, 16, BBEP_BLACK);
-  bbep.fillRect(w - 20, 4, 16, 16, BBEP_BLACK);
-  bbep.fillRect(4, h - 20, 16, 16, BBEP_BLACK);
-  bbep.fillRect(w - 20, h - 20, 16, 16, BBEP_BLACK);
-
-  // Centre cross.
-  bbep.drawLine(w / 2, 0, w / 2, h - 1, BBEP_BLACK);
-  bbep.drawLine(0, h / 2, w - 1, h / 2, BBEP_BLACK);
-
-  // Diagonals: shear or aspect errors show as kinks against the corners.
-  bbep.drawLine(4, 4, w - 5, h - 5, BBEP_BLACK);
-  bbep.drawLine(w - 5, 4, 4, h - 5, BBEP_BLACK);
-
-  // Rulers every 50 px, longer ticks every 100 px.
-  for (int x = 0; x < w; x += 50) {
-    bbep.drawLine(x, 4, x, (x % 100 == 0) ? 24 : 14, BBEP_BLACK);
+// Idle is HIGH on UC81xx. Returns true when the panel reached idle.
+bool waitBusy(uint32_t timeoutMs, uint32_t *waitedMs) {
+  const uint32_t t0 = millis();
+  delay(5);
+  while (digitalRead(PIN_BUSY) == LOW) {
+    if (millis() - t0 >= timeoutMs) {
+      if (waitedMs) *waitedMs = millis() - t0;
+      return false;
+    }
+    delay(1);
   }
-  for (int y = 0; y < h; y += 50) {
-    bbep.drawLine(4, y, (y % 100 == 0) ? 24 : 14, y, BBEP_BLACK);
-  }
+  if (waitedMs) *waitedMs = millis() - t0;
+  return true;
+}
 
-  // Top band: alternating 40 px blocks, shows banding/dropped columns.
-  for (int x = 0; x < w; x += 80) {
-    bbep.fillRect(x, 30, 40, 10, BBEP_BLACK);
-  }
-  // Bottom band: 1 px on / 1 px off, shows pixel-level artefacts.
-  for (int x = 0; x < w; x += 2) {
-    bbep.drawLine(x, h - 16, x, h - 10, BBEP_BLACK);
-  }
+void resetPanel() {
+  gpio_hold_dis(static_cast<gpio_num_t>(PIN_RST));
+  pinMode(PIN_RST, OUTPUT);
+  digitalWrite(PIN_RST, HIGH);
+  delay(10);
+  digitalWrite(PIN_RST, LOW);
+  delay(50);
+  digitalWrite(PIN_RST, HIGH);
+}
 
-  bbep.setFont(FONT_16x16);
-  bbep.setTextColor(BBEP_BLACK, BBEP_WHITE);
-  bbep.drawString("X4C PANEL TEST", 300, 170);
-  bbep.setFont(FONT_12x16);
-  bbep.drawString("UC8279", 360, 200);
-  bbep.drawString("800 x 480", 345, 222);
+void initPanel() {
+  cmd(0x00);  // PSR
+  data1(0x37);
+  data1(0x4D);
+  cmd(0x61);  // TRES 800 x 600 (480 visible)
+  data1((W >> 8) & 0xFF);
+  data1(W & 0xFF);
+  data1((TRES_H >> 8) & 0xFF);
+  data1(TRES_H & 0xFF);
+  cmd(0x65);  // GSST
+  data1(0x00);
+  data1(0x00);
+  data1(0x00);
+  data1(0x00);
+  cmd(0x03);  // PFS
+  data1(0x20);
+  // No PLL on the X4C (stock omits it); PWR/VDCS/BTST stay OTP-programmed.
+  cmd(0xE1);  // gate scan
+  data1(0x02);
+}
 
-  bbep.setFont(FONT_8x8);
-  bbep.drawString("LEFT KEY / GPIO0", 24, 300);
-  bbep.drawString("RIGHT KEY / GPIO7", 620, 300);
-
-  out("pattern drawn, full refresh...");
-  bbep.refresh(REFRESH_FULL, true);
-  out("full refresh returned");
-
-  // One-shot dump of the 1-bpp framebuffer that was pushed to the panel, so the
-  // pattern can be reconstructed and compared against what the panel shows.
-  {
-    const uint8_t *fb = static_cast<const uint8_t *>(bbep.getBuffer());
-    const size_t stride = (w + 7) / 8;
-    const size_t total = stride * h;
-    if (fb != nullptr) {
-      out("FB begin %ux%u stride=%u total=%u", (unsigned)w, (unsigned)h,
-          (unsigned)stride, (unsigned)total);
-      for (size_t off = 0; off < total; off += 32) {
-        char line[160];
-        int n = snprintf(line, sizeof(line), "FB %06x ", (unsigned)off);
-        for (size_t i = 0; i < 32 && off + i < total; i++) {
-          n += snprintf(line + n, sizeof(line) - n, "%02x", fb[off + i]);
-        }
-        esp_log_write(ESP_LOG_ERROR, "X4C", "%s\n", line);
-      }
-      out("FB end");
+// Stream one full 600-gate plane: 120 white rows, then the visible rows, then
+// any remaining rows white. CS stays low for the whole upload.
+void streamPlane(uint8_t ramCmd, const uint8_t *fb, bool whiteVisibleRows) {
+  uint8_t white[STRIDE];
+  memset(white, 0xFF, sizeof(white));
+  digitalWrite(PIN_DC, LOW);
+  csLow();
+  SPI.transfer(ramCmd);
+  digitalWrite(PIN_DC, HIGH);
+  for (int y = 0; y < GATE_OFFSET; y++) SPI.writeBytes(white, STRIDE);
+  for (int y = 0; y < H; y++) {
+    if (whiteVisibleRows) {
+      SPI.writeBytes(white, STRIDE);
     } else {
-      out("FB missing");
+      SPI.writeBytes(g_fb + y * STRIDE, STRIDE);
     }
   }
+  for (int y = GATE_OFFSET + H; y < TRES_H; y++) SPI.writeBytes(white, STRIDE);
+  csHigh();
+}
 
-  pinMode(PIN_KEY_LEFT, INPUT_PULLUP);
-  pinMode(PIN_KEY_RIGHT, INPUT_PULLUP);
+void refreshFrame(const char *tag) {
+  const uint32_t t0 = millis();
+  streamPlane(0x13, g_fb, false);  // DTM2 = new image
+  streamPlane(0x10, nullptr, true);  // DTM1 = white seed (clean full flash)
+  const uint32_t uploadMs = millis() - t0;
 
-  bool left = false, right = false;
-  uint32_t lastAlive = millis();
+  cmd(0x50); data1(0x97);  // CDI, written on every refresh by stock
+  cmd(0xE0); data1(0x02);  // CCSET
+  cmd(0xE5); data1(0x1E);  // TSSET, full refresh
+  cmd(0x04);               // PON
+  uint32_t ponMs = 0;
+  const bool ponOk = waitBusy(5000, &ponMs);
+
+  cmd(0x00); data1(0x17); data1(0x4D);  // PSR rewrite between PON and DRF
+
+  digitalWrite(PIN_DC, LOW);
+  csLow();
+  SPI.transfer(0x12);  // DRF
+  csHigh();
+
+  bool dropped = false;
+  const uint32_t tDrop = millis();
+  while (millis() - tDrop < 100) {
+    if (digitalRead(PIN_BUSY) == LOW) {
+      dropped = true;
+      break;
+    }
+    delay(1);
+  }
+  uint32_t drfMs = 0;
+  const bool drfOk = waitBusy(20000, &drfMs);
+
+  cmd(0x02);  // POF
+  uint32_t pofMs = 0;
+  const bool pofOk = waitBusy(5000, &pofMs);
+
+  out("FRAME %s: upload=%ums pon=%ums(%s) drop=%s drf=%ums(%s) pof=%ums(%s) total=%ums", tag,
+      (unsigned)uploadMs, (unsigned)ponMs, ponOk ? "ok" : "TIMEOUT", dropped ? "yes" : "NO",
+      (unsigned)drfMs, drfOk ? "ok" : "TIMEOUT", (unsigned)pofMs, pofOk ? "ok" : "TIMEOUT",
+      (unsigned)(millis() - t0));
+}
+
+// ---- drawing ------------------------------------------------------------
+
+inline void px(int x, int y, bool black) {
+  if (x < 0 || x >= W || y < 0 || y >= H) return;
+  const uint8_t mask = static_cast<uint8_t>(0x80 >> (x & 7));
+  if (black) {
+    g_fb[y * STRIDE + (x >> 3)] &= static_cast<uint8_t>(~mask);
+  } else {
+    g_fb[y * STRIDE + (x >> 3)] |= mask;
+  }
+}
+
+void fillRect(int x, int y, int w, int h, bool black) {
+  for (int yy = y; yy < y + h; yy++)
+    for (int xx = x; xx < x + w; xx++) px(xx, yy, black);
+}
+
+void line(int x0, int y0, int x1, int y1) {
+  int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+  int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+  int err = dx + dy;
   for (;;) {
+    px(x0, y0, true);
+    if (x0 == x1 && y0 == y1) break;
+    const int e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+
+void drawPattern() {
+  memset(g_fb, 0xFF, sizeof(g_fb));  // white
+  fillRect(0, 0, W, 4, true);        // frame, all four edges
+  fillRect(0, H - 4, W, 4, true);
+  fillRect(0, 0, 4, H, true);
+  fillRect(W - 4, 0, 4, H, true);
+
+  fillRect(4, 4, 16, 16, true);  // corner squares
+  fillRect(W - 20, 4, 16, 16, true);
+  fillRect(4, H - 20, 16, 16, true);
+  fillRect(W - 20, H - 20, 16, 16, true);
+
+  // Asymmetric orientation markers: wide bar top-left, tall bar bottom-right.
+  fillRect(40, 40, 120, 24, true);
+  fillRect(W - 64, H - 160, 24, 120, true);
+
+  line(W / 2, 0, W / 2, H - 1);  // centre cross
+  line(0, H / 2, W - 1, H / 2);
+  line(4, 4, W - 5, H - 5);  // diagonals
+  line(W - 5, 4, 4, H - 5);
+
+  for (int x = 0; x < W; x += 50) line(x, 4, x, (x % 100 == 0) ? 24 : 14);
+  for (int y = 0; y < H; y += 50) line(4, y, (y % 100 == 0) ? 24 : 14, y);
+
+  for (int x = 0; x < W; x += 80) fillRect(x, 30, 40, 10, true);  // top band
+  for (int x = 0; x < W; x += 2) line(x, H - 16, x, H - 10);      // bottom stripes
+}
+
+// ---- keys / dwell -------------------------------------------------------
+
+void dwell(uint32_t ms) {
+  static bool left = false, right = false;
+  const uint32_t t0 = millis();
+  while (millis() - t0 < ms) {
     const bool nl = digitalRead(PIN_KEY_LEFT) == LOW;
     const bool nr = digitalRead(PIN_KEY_RIGHT) == LOW;
     if (nl != left) out("KEY LEFT (GPIO0) %s", nl ? "pressed" : "released");
     if (nr != right) out("KEY RIGHT (GPIO7) %s", nr ? "pressed" : "released");
     left = nl;
     right = nr;
-    if (millis() - lastAlive >= 5000) {
-      lastAlive = millis();
-      out("ALIVE controller=%s %ux%u", x4c_panel_name(x4c_active_panel()), (unsigned)w,
-          (unsigned)h);
-    }
-    delay(20);
+    delay(10);
+  }
+}
+
+}  // namespace
+
+void x4c_panel_test_run() {
+  delay(300);
+  out("=== X4C UC8279 DIRECT DIAGNOSTIC (reference sequence) ===");
+  out("chip=%s rev=%u reset_reason=%d", ESP.getChipModel(), ESP.getChipRevision(),
+      static_cast<int>(esp_reset_reason()));
+  out("pins: sclk=%d mosi=%d cs=%d dc=%d rst=%d busy=%d power=%d", PIN_SCLK, PIN_MOSI, PIN_CS,
+      PIN_DC, PIN_RST, PIN_BUSY, PIN_PANEL_POWER);
+
+  pinMode(PIN_PANEL_POWER, OUTPUT);
+  digitalWrite(PIN_PANEL_POWER, HIGH);
+  delay(150);
+  out("rail: gpio%d=%d busy=%d (before reset)", PIN_PANEL_POWER,
+      digitalRead(PIN_PANEL_POWER), digitalRead(PIN_BUSY));
+
+  pinMode(PIN_CS, OUTPUT);
+  digitalWrite(PIN_CS, HIGH);
+  pinMode(PIN_DC, OUTPUT);
+  digitalWrite(PIN_DC, HIGH);
+  pinMode(PIN_MOSI, OUTPUT);
+  pinMode(PIN_SCLK, OUTPUT);
+  pinMode(PIN_BUSY, INPUT);
+  pinMode(PIN_KEY_LEFT, INPUT_PULLUP);
+  pinMode(PIN_KEY_RIGHT, INPUT_PULLUP);
+
+  SPI.begin(PIN_SCLK, -1, PIN_MOSI, -1);
+  SPI.beginTransaction(SPISettings(SPI_HZ, MSBFIRST, SPI_MODE0));
+
+  resetPanel();
+  uint32_t busMs = 0;
+  const bool busyOk = waitBusy(1000, &busMs);
+  out("after reset: busy=%d idle=%s wait=%ums", digitalRead(PIN_BUSY), busyOk ? "ok" : "TIMEOUT",
+      (unsigned)busMs);
+
+  initPanel();
+  out("init sent (PSR 37/4D, TRES 800x600, GSST 0, PFS 20, E1 02)");
+
+  uint32_t cycle = 0;
+  for (;;) {
+    cycle++;
+    memset(g_fb, 0x00, sizeof(g_fb));
+    refreshFrame("BLACK");
+    dwell(8000);
+
+    memset(g_fb, 0xFF, sizeof(g_fb));
+    refreshFrame("WHITE");
+    dwell(8000);
+
+    drawPattern();
+    refreshFrame("PATTERN");
+    dwell(20000);
+    out("cycle %u complete", (unsigned)cycle);
   }
 }
 

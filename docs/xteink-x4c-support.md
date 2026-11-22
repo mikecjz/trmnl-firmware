@@ -96,14 +96,49 @@ X4 Pro's PLL command, as the Classic does).
   There is no PG/VBUS pin, so USB presence is reported `CONNECTED` only while
   charging and `UNKNOWN` otherwise — no invented DISCONNECTED.
 
+## UC8279 update path — what it takes for an image to appear
+
+Confirmed on the unit on 2026-11-22 with a direct driver using CrossPoint's
+reference sequence. The `0x70` probe works, but the generic `bb_epaper` UC81xx
+update path cannot drive this glass. Two independent faults:
+
+1. **No plane data.** `bb_epaper`'s `refresh()` sends the init sequence and DRF
+   only; pixel data is uploaded exclusively by `writePlane()`. A test that calls
+   `refresh()` alone leaves the controller RAM undefined, so the panel stays in
+   its undriven striped state even though `refresh()` reports success. The
+   shipping path does call `writePlane(PLANE_0)` (DTM2 only) and still misses
+   the old-plane seed required by the full-refresh waveform.
+2. **Wrong geometry.** The UC8279 is addressed as 800x600 and the visible 480
+   gate lines start at gate **120**. A plane upload must be 600 rows of 100
+   bytes: 120 white rows, then the 480 image rows. `bb_epaper`'s
+   `EP75_800x480` profile streams only 480 rows starting at gate 0, so even a
+   correct upload is shifted and the last 120 visible gates stay undefined.
+
+Working full-refresh sequence (verbatim from CrossPoint's `Uc8279X4Driver`):
+
+- Init: PSR `0x00` `0x37 0x4D`; TRES `0x61` 800x600; GSST `0x65` 0/0/0/0; PFS
+  `0x03` `0x20`; gate scan `0xE1` `0x02`. No PLL on the X4C; PWR/VDCS/BTST stay
+  OTP/MTP-programmed.
+- Frame: DTM2 `0x13` <- 600 rows (120 white + image); DTM1 `0x10` <- 600 rows
+  white (full-refresh old-plane seed); CDI `0x50` `0x97`; CCSET `0xE0` `0x02`;
+  TSSET `0xE5` `0x1E`; PON `0x04`; wait BUSY; PSR `0x00` `0x17 0x4D`; DRF
+  `0x12`; wait BUSY; POF `0x02`.
+- BUSY is idle-HIGH. A real full refresh drops BUSY after DRF and holds it for
+  about 1.24 s.
+- Measured on this unit at 10 MHz SPI: upload 102 ms (two 60 KB planes), PON
+  40 ms, DRF 1240 ms, POF 77 ms, about 1.46 s per frame, repeatable across
+  cycles.
+
+Any port must move the upload to a gate-offset-aware path; swapping the init
+table alone is not sufficient.
+
 ## Open items that still need the unit
 
-1. **Panel geometry / waveform.** The UC81xx init sends the 800x600 addressed
-   resolution the X4 Pro/Classic panels use (800 visible x 480, 120 gate
-   offset), but the X4C drivers add gate-offset and OTP-waveform handling that
-   `bb_epaper`'s generic UC81xx write path does not reproduce yet. The first
-   panel test will prove controller detection and whether an image appears; it
-   is not yet a final geometry/waveform validation.
+1. **Panel geometry / waveform.** Diagnosed: the generic `bb_epaper` path never
+   loads plane data for a standalone refresh and streams 480 rows at gate 0
+   instead of 600 rows with the 120-gate offset. See "UC8279 update path" above
+   for the verified sequence and timings. A gate-offset-aware upload still has
+   to be ported into the shipping driver.
 2. **Side-key up/down mapping disagrees between the two sources.** freeink maps
    GPIO0 -> up/previous and GPIO7 -> down/next; Papyrix has `up = 7, down = 0`.
    One `#define` (`X4C_SIDE_KEY_0_IS_UP`) in `include/config.h` makes this a
