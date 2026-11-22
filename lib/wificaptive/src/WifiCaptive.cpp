@@ -16,8 +16,8 @@
 void goToSleep(void);
 void saveShipmentStarted(void);
 void showMessageWithLogo(MSG message_type);
-// 15 minute timeout to prevent dead batteries
-#define PORTAL_TIMEOUT (15 * 60 * 1000)
+// 30 minute timeout to prevent dead batteries while leaving room for setup
+#define PORTAL_TIMEOUT (30 * 60 * 1000)
 // After a successful join the AP is torn down; keep it (and the portal) up this
 // long when no custom API server is saved, so the Server field can still be set.
 #define POST_CONNECT_PORTAL_MS (5 * 60 * 1000)
@@ -195,7 +195,7 @@ bool WifiCaptive::startPortal() {
   bool exited = false;
   long lTime = millis();
     // wait until SSID is provided
-  while ((millis() - lTime) < PORTAL_TIMEOUT) // keep CaptivePortal active for a maximum of 15 minutes
+  while ((millis() - lTime) < PORTAL_TIMEOUT) // keep CaptivePortal active for a maximum of 30 minutes
   {
     _dnsServer->processNextRequest();
 

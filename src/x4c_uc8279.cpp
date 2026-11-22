@@ -135,6 +135,23 @@ bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height) 
   digitalWrite(s_dc, HIGH);
   pinMode(s_busy, INPUT);
 
+#ifdef X4C_FB_DUMP
+  // One-shot framebuffer dump for comparing the source image against the glass.
+  static int dumps_left = 2;
+  if (dumps_left > 0) {
+    dumps_left--;
+    out("FB begin %ux%u stride=%d total=%u", (unsigned)width, (unsigned)height, stride,
+        (unsigned)(stride * height));
+    for (int y = 0; y < height; y++) {
+      char line[64 + 3 * 100];
+      int n = snprintf(line, sizeof(line), "FB %03d ", y);
+      for (int i = 0; i < stride; i++) n += snprintf(line + n, sizeof(line) - n, "%02x", fb[y * stride + i]);
+      esp_log_write(ESP_LOG_ERROR, "X4C", "%s\n", line);
+    }
+    out("FB end");
+  }
+#endif
+
   const uint32_t t0 = millis();
   SPI.beginTransaction(SPISettings(kSpiHz, MSBFIRST, SPI_MODE0));
 
