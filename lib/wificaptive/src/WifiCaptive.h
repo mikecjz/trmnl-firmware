@@ -72,6 +72,7 @@ private:
   WifiCredentials _enterprise_credentials;
   std::atomic<WifiConnectionState> _connectionState{WifiConnectionState::Idle};
   std::atomic<uint32_t> _connectionRequestedAt{0};
+  uint32_t _postConnectDeadline = 0;
 
   std::function<void()> _resetcallback;
   std::function<void()> _tickCallback = nullptr;
@@ -123,6 +124,9 @@ public:
 
   /// @brief Asks for the portal on the next WiFi session even though networks are saved. The saved
   ///        networks are kept. Persisted, so it survives the restart after a failed join.
+  /// @brief True when a custom API server is saved (or supplied by this portal session).
+  bool apiServerConfigured();
+
   void requestPortal();
 
   /// @brief True when the portal should open: nothing is saved, or requestPortal() was called.

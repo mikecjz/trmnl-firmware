@@ -148,7 +148,41 @@ wedged:
 - Panel controller differences (SSD1677 / UC8179 / UC8279) are software-selected;
   no recovery step depends on knowing which one the unit has.
 
-## 7. Bring-up tools
+## 7. Setup portal (Wi-Fi and server)
+
+After the client boots with no saved network it broadcasts an open AP,
+**`TRMNL-<MAC suffix>`** (for this unit `TRMNL-9536EC`), on channel 6. The
+portal is at **`http://4.3.2.1`** (not the usual 192.168.4.1) and stays open for
+15 minutes.
+
+Order matters:
+
+1. **Advanced Settings -> Server -> "API server"** first, and press **Save**.
+   The URL is stored immediately in NVS and does not depend on Wi-Fi. Enter it
+   without a trailing slash (`https://oraclesj.mikeximin.com/kindle-trmnl`).
+2. Then **Wi-Fi -> Select a Network**, pick the SSID, enter the password,
+   **Connect**.
+3. When it joins, the device pairs via `/api/setup` and fetches `/api/display`.
+
+Notes:
+
+- The ESP32-S3 is **2.4 GHz only**. A 5 GHz-only SSID never appears in the
+  scan; typing one manually fails as "network not found". Use the 2.4 GHz SSID
+  (or a band-steering SSID that offers 2.4 GHz) and WPA2-PSK where possible.
+  Hidden SSIDs work through the "Network name" field.
+- The Wi-Fi row's "No Wi-Fi saved yet" description means the portal has no saved
+  network yet; it is not a live radio-status indicator.
+- With the current client, the join attempt briefly takes the AP down (the STA
+  path switched the radio to STA-only). A failed join restarts the device, and
+  the AP returns about 20 s later with no network saved. If the AP does not come
+  back: power-cycle (long-press power, then press to turn on). Still nothing:
+  hold **UP** and plug USB to reach the ROM loader.
+- The flow fix keeps the AP up during the attempt (AP+STA) and keeps the portal
+  open after a failed join or a successful join with no Server saved, so the
+  unit never needs a restart to be recovered. It is built but must be flashed
+  as an app-only update at `0x20000` once the unit is back on USB.
+
+## 8. Bring-up tools
 
 - `tools/x4c-probe/` — standalone app-only probe. Powers the panel rail, resets
   the panel, issues only `0x70` and clocks three bytes back; no panel init, no

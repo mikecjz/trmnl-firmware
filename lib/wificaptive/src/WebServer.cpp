@@ -210,6 +210,8 @@ void setUpWebserver(AsyncWebServer &server, const IPAddress &localIP, WifiOperat
   server.on("/connection-status", HTTP_GET, [callbacks](AsyncWebServerRequest *request) {
     String response = "{\"status\":\"";
     response += connectionStateName(callbacks.getConnectionState());
+    response += "\",\"ip\":\"";
+    if (WiFi.status() == WL_CONNECTED) response += WiFi.localIP().toString();
     response += "\"}";
     request->send(200, "application/json", response);
   });

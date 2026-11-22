@@ -18,6 +18,9 @@ void saveShipmentStarted(void);
 void showMessageWithLogo(MSG message_type);
 // 15 minute timeout to prevent dead batteries
 #define PORTAL_TIMEOUT (15 * 60 * 1000)
+// After a successful join the AP is torn down; keep it (and the portal) up this
+// long when no custom API server is saved, so the Server field can still be set.
+#define POST_CONNECT_PORTAL_MS (5 * 60 * 1000)
 
 void WifiCaptive::setUpDNSServer(DNSServer &dnsServer, const IPAddress &localIP) {
   dnsServer.setTTL(3600);
@@ -196,6 +199,14 @@ bool WifiCaptive::startPortal() {
   {
     _dnsServer->processNextRequest();
 
+    // Post-connect grace window: the AP drops as soon as the loop breaks, so
+    // stay up for a while when the server field has not been set yet.
+    if (succesfullyConnected && _postConnectDeadline != 0 &&
+        (int32_t)(millis() - _postConnectDeadline) >= 0) {
+      Log_info("Portal: post-connect setup window elapsed, finishing");
+      break;
+    }
+
     if (_tickCallback) _tickCallback();
 
     if (_exitRequested.load()) {
@@ -250,13 +261,22 @@ bool WifiCaptive::startPortal() {
         res = result.status == WL_CONNECTED;
         if (!res) failureState = classifyConnectionFailure(result);
         if (!res) {
-          // The main chip dropped the portal AP to try this network, so restart to avoid leaving the device stuck
-          Log_info("Connection failed, restarting device to bring the portal back up");
+          // Keep the setup portal reachable so the user can retry and still
+          // save the Server field. Re-assert the softAP in case the attempt
+          // left it down or moved it to the STA channel.
+          Log_info("Connection failed; keeping the setup portal up for a retry");
           Preferences preferences;
           preferences.begin("wificaptive", false);
           preferences.putUChar(WIFI_PORTAL_FAILURE_KEY, (uint8_t)failureState);
           preferences.end();
-          ESP.restart();
+          WiFi.disconnect();
+          WiFi.enableSTA(false);
+          WiFi.mode(WIFI_MODE_AP);
+          delay(100);
+          WiFi.softAP(getAPSSID().c_str(), WIFI_PASSWORD, WIFI_CHANNEL, 0, MAX_CLIENTS);
+          delay(100);
+          _connectionState = failureState;
+          continue;
         }
       }
 
@@ -265,7 +285,13 @@ bool WifiCaptive::startPortal() {
         saveWifiCredentials(credentials);
         if (_api_server_given) saveApiServer(_api_server);
         succesfullyConnected = true;
-        break;
+        if (apiServerConfigured()) break;
+        // No custom server saved yet. Tearing the AP down here would make
+        // Advanced -> Server unreachable, so keep the portal alive until the
+        // user saves it and presses Done (or the grace window expires).
+        _postConnectDeadline = millis() + POST_CONNECT_PORTAL_MS;
+        Log_info("Wi-Fi joined; keeping the setup portal up for server setup");
+        continue;
       } else {
         _connectionState = failureState;
         WiFi.disconnect();
@@ -929,3 +955,12 @@ bool findNetwork(const char *ssid, int32_t *rssi_out) {
 }
 
 WifiCaptive WifiCaptivePortal;
+
+bool WifiCaptive::apiServerConfigured() {
+  if (_api_server_given || _api_server.length() > 0) return true;
+  Preferences preferences;
+  preferences.begin("data", true);
+  const String url = preferences.getString("api_url", "");
+  preferences.end();
+  return url.length() > 0;
+}

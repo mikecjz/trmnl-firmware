@@ -112,6 +112,17 @@ void disableWpa2Enterprise() {
   esp_wifi_sta_wpa2_ent_clear_ca_cert();
 }
 
+// A join attempt must not take the setup portal down with it: keep the softAP
+// up (AP+STA) when the portal is running, so a failed attempt leaves the portal
+// reachable for a retry.
+static void selectConnectMode() {
+  if (WiFi.getMode() & WIFI_MODE_AP) {
+    WiFi.mode(WIFI_AP_STA);
+  } else {
+    WiFi.mode(WIFI_STA);
+  }
+}
+
 static void setWiFiBand(const WifiCredentials &credentials) {
 #ifdef CONFIG_SOC_WIFI_SUPPORT_5G
   if (credentials.is5GHz) {
@@ -205,7 +216,7 @@ WifiConnectionResult initiateConnectionAndWaitForOutcome(const WifiCredentials c
     }
 
         // configure WPA2 Enterprise
-    WiFi.mode(WIFI_STA);
+    selectConnectMode();
     applyWifiHostname(WifiCaptivePortal.getHostname());
     WiFi.disconnect();
     delay(100);
@@ -271,7 +282,7 @@ WifiConnectionResult initiateConnectionAndWaitForOutcome(const WifiCredentials c
     Log_info("WiFi: WPA2 Enterprise configured, starting from status %s", wifiStatusStr(beginResult));
   } else {
         // regular connection
-    WiFi.mode(WIFI_STA);
+    selectConnectMode();
 
     setWiFiBand(credentials);
 

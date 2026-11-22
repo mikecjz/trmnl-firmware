@@ -839,7 +839,7 @@
         title: 'Wi-Fi',
         desc: function () {
           if (!savedLoaded) return 'Networks your TRMNL can join';
-          if (!saved.length) return 'Not connected yet';
+          if (!saved.length) return 'No Wi-Fi saved yet';
           return saved.length === 1 ? saved[0].ssid : saved.length + ' saved networks';
         },
         tag: function () { return wifiEmpty() ? 'Start here' : ''; }
@@ -1388,17 +1388,19 @@
       };
       api('/connection-status').then(function (response) {
         if (response.status === 'connecting' || response.status === 'idle') return again();
-        displayConnectionResult(response.status, isEnterprise);
+        displayConnectionResult(response.status, isEnterprise, response.ip);
       }, again);
     }
 
-    function displayConnectionResult(status, isEnterprise) {
+    function displayConnectionResult(status, isEnterprise, ip) {
       show('connect-status', false);
       // the result may come back after a reload, on another page
       if ((currentPage() || {}).id !== 'add-network') location.hash = '#add-network';
 
       if (status === 'connected') {
-        pageMsg('Wi-Fi connected.');
+        pageMsg(ip
+          ? 'Wi-Fi connected. This device is at http://' + ip + ' — if you use your own server, set it under Advanced → Server, then press Done.'
+          : 'Wi-Fi connected. If you use your own server, set it under Advanced → Server, then press Done.');
         return;
       }
 
