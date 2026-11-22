@@ -5,6 +5,12 @@
 #include "power.h"
 #include "qa.h"
 
+#ifdef X4C_PANEL_TEST
+// Panel-only bring-up build: display init + alignment pattern, then key polling.
+// Defined in x4c_panel_test.cpp; never returns.
+void x4c_panel_test_run();
+#endif
+
 #ifdef BOARD_TRMNL_X
 #include "display.h"
 #include "esp_sleep.h"
@@ -12,9 +18,11 @@
 #include "logo_medium.h"
 #include "message_screens.h"
 #include "modem.h"
-
 // TRMNL X setup (quite different from OG)
 void setup() {
+#ifdef X4C_PANEL_TEST
+  x4c_panel_test_run();
+#endif
 #ifndef NO_QA
 
   bool isShipped = checkIfAlreadyShipped();
@@ -68,6 +76,9 @@ void setup() {
 }
 #else // TRMNL OG setup()
 void setup() {
+#ifdef X4C_PANEL_TEST
+  x4c_panel_test_run();
+#endif
 
   bool testPassed = checkIfAlreadyPassed();
   if (!testPassed) {

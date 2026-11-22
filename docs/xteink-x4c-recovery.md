@@ -41,6 +41,26 @@ SHA-256 off the device. The dump includes the stock bootloader, partition table,
 NVS (calibration data) and the stock app — this is the only guaranteed way back
 to stock, because the TRMNL partition layout is different.
 
+### Verified backup for this unit
+
+Taken read-only from the unit's ROM loader on 2026-11-22 and verified by
+`esptool verify-flash` over all 16 MiB:
+
+| Field | Value |
+|---|---|
+| File (runtime host) | `/Users/junzhouchen/trmnl-x4c-backup/x4c-stock-16MB.bin` |
+| Size | `16777216` bytes (`0x1000000`) |
+| SHA-256 | `907c752a21dafc00863890d613ccf8c165b431f9014cd40c3446255593f006b2` |
+| Device | ESP32-S3 rev v0.2, MAC `f8:5b:1b:95:36:ec`, 16 MB flash |
+| Per-chunk hashes | `/Users/junzhouchen/trmnl-x4c-backup/MANIFEST.txt` |
+
+The stub flasher aborts with "Serial data stream stopped" on this unit's USB
+link; the ROM loader (`--no-stub`) completes reliably at ~300 kbit/s. Use it for
+both reads and writes here.
+
+Keep a second copy outside that host (the file is the only record of the stock
+NVS, including Wi-Fi calibration).
+
 ## 3. Flash the TRMNL merged image
 
 Only after the backup exists and its hash has been recorded:
@@ -59,11 +79,25 @@ App-only updates, once the TRMNL layout is on the device, use `firmware.bin` at
 the app offset **(0x20000, not 0x10000)**:
 
 ```sh
-esptool.py --chip esp32s3 --port "$PORT" write_flash -z 0x20000 firmware.bin
+esptool --chip esp32s3 --port "$PORT" --no-stub write-flash -z 0x20000 firmware.bin
 ```
 
-Never write `firmware.bin` over the stock partition layout: the stock app lives
-at a different offset and the device will not boot.
+### App-only on the stock layout (bring-up)
+
+The stock partition table puts `app0` at **0x10000** and `otadata` selects it.
+While that table is still on the device (no merged image written yet), a
+bring-up app can be flashed over the stock app without touching the bootloader,
+partition table, NVS or the backup:
+
+```sh
+esptool --chip esp32s3 --port "$PORT" --no-stub write-flash 0x10000 firmware.bin
+# read it back and compare before trusting the boot
+esptool --chip esp32s3 --port "$PORT" --no-stub read-flash 0x10000 "$(stat -f%z firmware.bin)" readback.bin
+shasum -a 256 firmware.bin readback.bin
+```
+
+Never write `firmware.bin` over the stock partition layout at the TRMNL offset:
+the stock app lives at 0x10000 and the device will not boot.
 
 ## 4. Monitor
 
@@ -76,18 +110,27 @@ or any 115200 8N1 serial monitor. The X4C boot log prints the panel probe result
 
 ## 5. Rollback to stock
 
-Enter download mode again and restore the whole chip:
+Enter download mode again and restore the whole chip. Verify the image hash
+first, then write it — one pass, nothing else:
 
 ```sh
-esptool.py --chip esp32s3 --port "$PORT" write_flash \
-  --flash_mode dio --flash_freq 80m --flash_size 16MB \
-  -z 0x0 x4c-stock-backup.bin
+PORT=/dev/cu.usbmodemXXXX
+BACKUP=/Users/junzhouchen/trmnl-x4c-backup/x4c-stock-16MB.bin
+shasum -a 256 "$BACKUP"
+# must print: 907c752a21dafc00863890d613ccf8c165b431f9014cd40c3446255593f006b2
+
+esptool --chip esp32s3 --port "$PORT" --no-stub write-flash \
+  --flash-mode dio --flash-freq 80m --flash-size 16MB \
+  0x0 "$BACKUP"
 ```
 
-If the backup is from this exact unit, this restores the stock firmware,
-bootloader, partition table and NVS in one pass. Do **not** run `erase_flash`
-first unless the full restore fails repeatedly; a plain full-image write is
-enough and keeps the operation short. If the device is wedged:
+`--no-stub` is required on this unit (see §2). The write restores the stock
+firmware, bootloader, partition table and NVS in one pass. After it returns, the
+device should enumerate as `303A:4002` (stock USB-MSC) on the next normal boot.
+
+Do **not** run `erase_flash` first unless the full restore fails repeatedly; a
+plain full-image write is enough and keeps the operation short. If the device is
+wedged:
 
 1. Hold UP and replug USB; the ROM loader (`303A:1001`) should still appear.
 2. Re-run the backup restore at a lower baud rate (`--baud 115200`).
@@ -104,3 +147,18 @@ enough and keeps the operation short. If the device is wedged:
   private.
 - Panel controller differences (SSD1677 / UC8179 / UC8279) are software-selected;
   no recovery step depends on knowing which one the unit has.
+
+## 7. Bring-up tools
+
+- `tools/x4c-probe/` — standalone app-only probe. Powers the panel rail, resets
+  the panel, issues only `0x70` and clocks three bytes back; no panel init, no
+  LUT/waveform write. Flash at `0x10000` on the stock layout and read the
+  `PROBE_RESULT` lines.
+- `pio run -e x4c_panel_test` — panel-only test image: display init through the
+  shipping driver path, an 800×480 alignment pattern (4 px frame, corner
+  squares, rulers, diagonals, key labels), one full refresh, then key polling on
+  GPIO0/GPIO7 over the console.
+
+Verified on this unit: `0x70` returns `VER = 00 00 02`, i.e. **UC8279**
+(id `0x02`), stable across repeated probes. The stock app never persists this
+value, so an ejected-flash dump cannot reveal it — probe the panel instead.
