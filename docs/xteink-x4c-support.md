@@ -103,9 +103,21 @@ How the manual refresh works:
    `X4C_WAKE_KEY_MASK` (power + the four bottom keys) instead of ext0 on Power
    alone, so a bottom-key press wakes the chip. `src/pins.cpp` gives every wake
    key a pull-up.
+   The pull-up must be the **RTC pad pull-up** (`rtc_gpio_pullup_en`), not just
+   `pinMode(INPUT_PULLUP)`: the digital pull-up is lost with the digital domain
+   in deep sleep, and these pins have no external pull-up. Without it the pins
+   float low, ext1 fires the instant the chip sleeps and the unit boot-loops
+   (wake logo, dashboard, sleep, immediate wake). Any key that still reads low at
+   sleep time — held, stuck, or pressed by a stand — is left out of that sleep's
+   ext1 mask for the same reason; if none are released the wake is timer-only.
+   The five levels and the armed mask are logged as
+   `X4C: sleep: keys p3=… p5=… p2=… p8=… p9=… mask=…`.
 2. `src/button.cpp` reads `esp_sleep_get_ext1_wakeup_status()` to learn which key
    woke the unit; that works even for a tap released before boot reaches the
-   read. A bottom-key-only wake does not run the Power press-duration menu.
+   read. A bottom-key-only wake does not run the Power press-duration menu. A
+   `X4C: wake: reason=… mask=… prev_reason=… prev_mask=…` line records the
+   previous natural wake in RTC memory, because opening the USB console resets
+   the chip and loses the live wake cause.
 3. `src/wake_init.cpp` sets the `force_full_refresh` flag instead.
 4. `src/display_session.cpp` skips the "same filename as last wake, keep the
    screen" short-circuit, so the cached image is re-sent to the panel.
