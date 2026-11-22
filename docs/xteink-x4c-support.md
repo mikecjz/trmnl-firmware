@@ -129,16 +129,20 @@ Working full-refresh sequence (verbatim from CrossPoint's `Uc8279X4Driver`):
   40 ms, DRF 1240 ms, POF 77 ms, about 1.46 s per frame, repeatable across
   cycles.
 
-Any port must move the upload to a gate-offset-aware path; swapping the init
-table alone is not sufficient.
+The shipping `env:xteink_x4_classic` build now routes every UC8279 update
+through `src/x4c_uc8279.cpp` (called from `display_update_epaper()` and
+`display_wipe()`), so the dashboard path uses this sequence. The UC8179 profile
+still uses the generic `bb_epaper` path: it needs its own PLL/booster/VCOM
+bring-up and has not been validated on hardware.
 
 ## Open items that still need the unit
 
 1. **Panel geometry / waveform.** Diagnosed: the generic `bb_epaper` path never
    loads plane data for a standalone refresh and streams 480 rows at gate 0
    instead of 600 rows with the 120-gate offset. See "UC8279 update path" above
-   for the verified sequence and timings. A gate-offset-aware upload still has
-   to be ported into the shipping driver.
+   for the verified sequence and timings. Ported for UC8279 in
+   `src/x4c_uc8279.cpp`; UC8179 still needs the same treatment plus its own
+   power-rail bring-up.
 2. **Side-key up/down mapping disagrees between the two sources.** freeink maps
    GPIO0 -> up/previous and GPIO7 -> down/next; Papyrix has `up = 7, down = 0`.
    One `#define` (`X4C_SIDE_KEY_0_IS_UP`) in `include/config.h` makes this a

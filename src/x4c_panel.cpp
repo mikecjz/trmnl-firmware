@@ -244,17 +244,13 @@ static const uint8_t kUc8179Init[] PROGMEM = {
 static const uint8_t kUc8279Init[] PROGMEM = {
     EPD_RESET,
     BUSY_WAIT,
-    3, 0x00, 0x37, 0x4D,                   // panel setting
-    5, 0x61, 0x03, 0x20, 0x02, 0x58,       // 800x600 addressed resolution
-    5, 0x65, 0x00, 0x00, 0x00, 0x00,       // gate/source start
-    2, 0x03, 0x20,                         // power-off sequence
+    3, 0x00, 0x37, 0x4D,                   // PSR: REG=1 at init (reference init)
+    5, 0x61, 0x03, 0x20, 0x02, 0x58,       // TRES 800x600 addressed (480 visible)
+    5, 0x65, 0x00, 0x00, 0x00, 0x00,       // GSST
+    2, 0x03, 0x20,                         // PFS
     2, 0xE1, 0x02,                         // gate scan
-    1, 0x04,                               // PON
-    BUSY_WAIT,
-    2, 0x50, 0x97,                         // VCOM/data interval
-    2, 0xE0, 0x02,                         // CCSET
-    2, 0xE5, 0x1E,                         // TSSET
-    3, 0x00, 0x17, 0x4D,                   // OTP panel setting used before DRF
+    // Power-on, CDI/CCSET/TSSET, the post-PON PSR and DRF/POF are issued per
+    // update by x4c_uc8279_full_update() (reference full-refresh sequence).
     0,
 };
 

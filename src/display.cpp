@@ -16,6 +16,10 @@
 #include <refresh_interval.h>
 #include <x4c_panel.h>
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_uc8279.h>
+#endif
+
 #include "battery.h"
 #include "config.h"
 #include "messages.h"
@@ -91,6 +95,19 @@ static void display_apply_light_sleep(uint8_t enabled) {
 }
 
 bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t plane) {
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // The X4C UC8279 needs a gate-offset-aware upload plus a white old-plane seed
+  // and the reference trigger sequence; bb_epaper's generic path cannot do it.
+  if (x4c_uc8279_active()) {
+    const uint8_t *fb = static_cast<const uint8_t *>(bbep.getBuffer());
+    if (fb == nullptr) {
+      Log_error("display_update_epaper: no framebuffer");
+      return false;
+    }
+    bCanDoPartial = false;  // every update is a full OTP-waveform flash
+    return x4c_uc8279_full_update(fb, display_width(), display_height());
+  }
+#endif
 #if defined(BOARD_SEEED_RETERMINAL_E1002) || defined(BOARD_SEEED_RETERMINAL_E1004) || defined(BOARD_TRMNL_GEN2)
     // Light sleep with the WiFi radio running is unsupported
   if (bLightSleepWanted && WiFi.getMode() != WIFI_MODE_NULL) {
@@ -252,6 +269,20 @@ void display_set_light_sleep(uint8_t enabled) {
 // Clear any ghosting on the X display by wiping it black/white many times
 void display_wipe(void) {
 #ifdef BB_EPAPER
+
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  if (x4c_uc8279_active()) {
+    // Each pass is a full OTP-waveform flash (~1.5 s); two passes clear ghosting
+    // without the 60-iteration loop the desktop panels use.
+    display_set_panel_type(dpList[active_panel_set_index()][iTempProfile].OneBit);
+    bbep.fillScreen(BBEP_WHITE);
+    const uint8_t *fb = static_cast<const uint8_t *>(bbep.getBuffer());
+    for (int i = 0; i < 2; i++) {
+      x4c_uc8279_full_update(fb, display_width(), display_height());
+    }
+    return;
+  }
+#endif
 
 #ifdef BOARD_TRMNL_4CLR
   int refreshCount = 2;
