@@ -38,10 +38,9 @@ const TRMNL_DEVICE device_list[] =
   "xteink_x4",     8,    10,    21,  5,    4,   6,    0xff, 0xff, 3,     0,    0xff,    0xff,   BATT_ADC,  EPD_426,
   // Xteink X4 Classic (X4 v2): display SCLK/MOSI/CS/RST/DC/BUSY = 12/11/13/10/14/18,
   // power button = GPIO3, CW2017 gauge + BM8563 RTC on I2C SDA39/SCL38 @0x63/0x51.
-  // BATT_NONE until the CW2017 driver exists (TRMNL has ADC/BQ27220/BQ27427/AXP2101 only).
-  // EPD_426 is a placeholder: the unit's controller (SSD1677/UC8179/UC8279) is probed at boot
-  // in CrossPoint/Papyrix and still needs a port here.
-  "xteink_x4_classic", 12, 11, 13, 10, 14, 18, 39, 38, 3, 0xff, 0xff, 0xff, BATT_NONE, EPD_426,
+  // panel_set is only the compile-time default; x4c_detect_panel() overrides it at boot
+  // from factory screenType then the 0x70 probe (SSD1677 / UC8179 / UC8279).
+  "xteink_x4_classic", 12, 11, 13, 10, 14, 18, 39, 38, 3, 0xff, 0xff, 0xff, BATT_CW2017, EPD_X4C_SSD1677,
   "xteink_x3",     8,    10,    21,  5,    4,   6,    20,   0,    3,     0xff, 0xff,    0xff,   BATT_BQ27220,  EPD_368,
   "waveshare",     13,   14,    15,  26,   27,  25,   0xff, 0xff, 33,    0xff, 0xff,    0xff,   BATT_ADC,  EPD_75,
   "waveshare_397", 11,   12,    10,  46,   9,   3,    41,   42,   0,     0xff, 0xff,    0xff,   BATT_AXP2101,  EPD_397,
@@ -70,7 +69,7 @@ const TRMNL_DEVICE device_list[] =
 // TRMNL SPI ePaper panel types list. The list order is fixed and based on enumerated values
 // N.B. ALWAYS ADD NEW PANELS TO THE END OF THE LIST
 // clang-format off
-const DISPLAY_PROFILE dpList[16][3] = { // 1-bit and 2-bit display types for each profile
+const DISPLAY_PROFILE dpList[19][3] = { // 1-bit and 2-bit display types for each profile
     {{EP75_800x480, EP75_800x480_4GRAY}, {EP75_800x480_GEN2, EP75_800x480_4GRAY_GEN2}, {EP75_800x480, EP75_800x480_4GRAY_V2}},
     {{EP426_800x480, EP426_800x480_4GRAY}, {EP426_800x480, EP426_800x480_4GRAY}, {EP426_800x480, EP426_800x480_4GRAY}},
     {{EP426B_800x480, EP426B_800x480_4GRAY}, {EP426B_800x480, EP426B_800x480_4GRAY}, {EP426B_800x480, EP426B_800x480_4GRAY}},
@@ -87,6 +86,13 @@ const DISPLAY_PROFILE dpList[16][3] = { // 1-bit and 2-bit display types for eac
     {{EP42C_400x300, EP42C_400x300},{EP42C_400x300, EP42C_400x300},{EP42C_400x300, EP42C_400x300}},
     {{EP42YR_400x300, EP42YR_400x300}, {EP42YR_400x300, EP42YR_400x300}, {EP42YR_400x300, EP42YR_400x300}},
     {{EP397C_800x480, EP397C_800x480_4GRAY}, {EP397C_800x480, EP397C_800x480_4GRAY}, {EP397C_800x480, EP397C_800x480_4GRAY}},
+    // Xteink X4 Classic, one set per controller the boot probe can resolve. The SSD1677
+    // profile is bb_epaper's EP426 init, which is the C3 X4's proven 800x480 SSD1677 path.
+    // The two UC81xx entries share the generic 800x480 UC81xx base and get the X4C-specific
+    // init table from x4c_apply_panel_overrides(); see docs/xteink-x4c-support.md.
+    {{EP426_800x480, EP426_800x480_4GRAY}, {EP426_800x480, EP426_800x480_4GRAY}, {EP426_800x480, EP426_800x480_4GRAY}},
+    {{EP75_800x480, EP75_800x480_4GRAY}, {EP75_800x480, EP75_800x480_4GRAY}, {EP75_800x480, EP75_800x480_4GRAY}},
+    {{EP75_800x480, EP75_800x480_4GRAY}, {EP75_800x480, EP75_800x480_4GRAY}, {EP75_800x480, EP75_800x480_4GRAY}},
 };
 // clang-format on
 #endif // !PARALLEL_EPD
@@ -104,3 +110,24 @@ void hw_config_init(const char *name) {
     Log_info("Device name (%s) not found in supported list!", name);
   }
 } /* hw_config_init() */
+
+// ---------------------------------------------------------------------------
+// Runtime panel selection for boards that probe more than one controller.
+//
+// pDevice points into the const device_list, so the selected dpList entry is
+// kept beside it. Boards without a probe leave the override unset and keep
+// using pDevice->panel_set exactly as before.
+// ---------------------------------------------------------------------------
+#ifndef PARALLEL_EPD
+static uint8_t active_panel_set_override = 0xFF;
+
+uint8_t active_panel_set_index() {
+  return (active_panel_set_override != 0xFF) ? active_panel_set_override : pDevice->panel_set;
+}
+
+void set_active_panel_set(uint8_t panel_set) { active_panel_set_override = panel_set; }
+#else
+// Parallel-panel boards (TRMNL X) select their panel by board type, not dpList.
+uint8_t active_panel_set_index() { return 0; }
+void set_active_panel_set(uint8_t) {}
+#endif // !PARALLEL_EPD

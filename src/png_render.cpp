@@ -1,6 +1,7 @@
 #include <PNGdec.h>
 #include <board_config.h>
 #include <color_reduce.h>
+#include <display.h>
 #include <epd_driver.h>
 #include <globals.h>
 #include <new>
@@ -640,7 +641,7 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
         png->openRAM((uint8_t *)pPNG, iDataSize, png_draw_2bit_bw);
         if (png->getBpp() >= 2) { // Draw as 2-bit grayscale image
           Log_info("Using 2-bit grayscale panel setup for this image");
-          bbep.setPanelType(dpList[pDevice->panel_set][0].TwoBit);
+          display_set_panel_type(dpList[active_panel_set_index()][0].TwoBit);
           bbep.sendInit();
         }
         bbep.startWrite(PLANE_1); // start writing image data (0x10 cmd instead of 0x13)
@@ -674,9 +675,9 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
           (png->getBpp() == 2 && png_count_colors(png, pPNG, iDataSize) == 2)) { // 1-bit image (single plane)
         png->close(); // use a different PNGDraw callback for color matching
         if (pDevice->epd_mosi_pin != 0 || pDevice->epd_sck_pin != 0) {
-          bbep.setPanelType(dpList[pDevice->panel_set][iTempProfile].OneBit);
+          display_set_panel_type(dpList[active_panel_set_index()][iTempProfile].OneBit);
         } else {
-          bbep.begin(dpList[pDevice->panel_set][0].OneBit);
+          bbep.begin(dpList[active_panel_set_index()][0].OneBit);
         }
         rc = REFRESH_PARTIAL; // the new image is 1bpp - try a partial update
         bbep.startWrite(PLANE_0); // start writing image data to plane 0
@@ -704,11 +705,11 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
         } // temp profile needs the second plane written
       } else { // 2-bpp (or greater, but reduced to 2-bpp)
         if (pDevice->epd_mosi_pin != 0 || pDevice->epd_sck_pin != 0) {
-          bbep.setPanelType(dpList[pDevice->panel_set][iTempProfile].TwoBit);
+          display_set_panel_type(dpList[active_panel_set_index()][iTempProfile].TwoBit);
           bbep.initIO(pDevice->epd_dc_pin, pDevice->epd_rst_pin, pDevice->epd_busy_pin, pDevice->epd_cs_pin,
                       pDevice->epd_mosi_pin, pDevice->epd_sck_pin, 8000000);
         } else {
-          bbep.begin(dpList[pDevice->panel_set][0].TwoBit);
+          bbep.begin(dpList[active_panel_set_index()][0].TwoBit);
         }
         rc = REFRESH_FULL; // 4gray mode must be full refresh
         iUpdateCount = 0; // grayscale mode resets the partial update counter

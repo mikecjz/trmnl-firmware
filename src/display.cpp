@@ -14,6 +14,7 @@
 #include <power.h>
 #include <preferences_persistence.h>
 #include <refresh_interval.h>
+#include <x4c_panel.h>
 
 #include "battery.h"
 #include "config.h"
@@ -23,6 +24,22 @@ FASTEPD bbep;
 #else
 BBEPAPER bbep;
 #endif // !PARALLEL_EPD
+
+// Selects a bb_epaper panel type and re-applies any board-specific init table.
+// The X4C UC8179/UC8279 profiles share bb_epaper's generic 800x480 UC81xx base
+// but must load the X4C init sequence every time the type is (re)selected.
+void display_set_panel_type(uint32_t panel_type) {
+#ifndef PARALLEL_EPD
+  bbep.setPanelType((int)panel_type);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  if (panel_type == EP75_800x480) { // X4C UC81xx 1-bit base; leave gray/other modes alone
+    x4c_apply_panel_overrides(bbep, x4c_active_panel());
+  }
+#endif
+#else
+  (void)panel_type;
+#endif
+}
 
 #ifdef PARALLEL_EPD
 #include "driver/gpio.h"
@@ -96,13 +113,13 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
   }
   bbep.refresh(refreshMode, wait);
     // The next update can be a partial update because the current is 1-bpp and stays in the EPD RAM
-  bCanDoPartial = (bbep.getPanelType() == dpList[pDevice->panel_set][iTempProfile].OneBit);
+  bCanDoPartial = (bbep.getPanelType() == dpList[active_panel_set_index()][iTempProfile].OneBit);
   return true;
 }
 
 static void display_select_one_bit_panel(bool only_if_changed = false) {
   bool custom_pins = pDevice->epd_mosi_pin != 0 || pDevice->epd_sck_pin != 0;
-  int one_bit = dpList[pDevice->panel_set][custom_pins ? iTempProfile : 0].OneBit;
+  int one_bit = dpList[active_panel_set_index()][custom_pins ? iTempProfile : 0].OneBit;
   if (only_if_changed && bbep.getPanelType() == one_bit) {
     return;
   }
@@ -156,6 +173,13 @@ void display_init(void) {
   digitalWrite(17, HIGH);
 #endif // BOARD_ZECTRIX_NOTE4
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // Resolve SSD1677 / UC8179 / UC8279 before bb_epaper claims the SPI pins.
+  // The probe bit-bangs MOSI; get_panel_rev() below re-reads it later for the
+  // Panel-Rev header, and bb_epaper's initIO then takes the bus back.
+  x4c_detect_panel(pDevice);
+#endif
+
     // Read the panel ID after any board-specific power/CS setup, but before bb_epaper takes over the SPI pins.
     // Only on the first call: the bit-banged read detaches SCK/MOSI from the SPI peripheral, and
     // SPI.begin() is a no-op once the bus is running, so a second read would leave the panel unreachable.
@@ -171,11 +195,11 @@ void display_init(void) {
     hw_config_init("xiao_epaper_mini_b");
   }
   if (pDevice->epd_mosi_pin != 0 || pDevice->epd_sck_pin != 0) {
-    bbep.setPanelType(dpList[pDevice->panel_set][iTempProfile].OneBit); // must be set BEFORE calling initio
+    display_set_panel_type(dpList[active_panel_set_index()][iTempProfile].OneBit); // must be set BEFORE calling initio
     bbep.initIO(pDevice->epd_dc_pin, pDevice->epd_rst_pin, pDevice->epd_busy_pin, pDevice->epd_cs_pin,
                 pDevice->epd_mosi_pin, pDevice->epd_sck_pin, 8000000);
   } else { // it's a pre-defined PCB+display in bb_epaper
-    bbep.begin(dpList[pDevice->panel_set][0].OneBit);
+    bbep.begin(dpList[active_panel_set_index()][0].OneBit);
   }
   if (strcmp(DEVICE_MODEL, "seeed_sticky_b") == 0 && bbep.testPanelType() == BBEP_CHIP_SSD16xx) {
     // New 3.97" panel needs a different ePaper configuration
@@ -235,7 +259,7 @@ void display_wipe(void) {
   int refreshCount = 60;
 #endif
 
-  bbep.setPanelType(dpList[pDevice->panel_set][iTempProfile].OneBit);
+  display_set_panel_type(dpList[active_panel_set_index()][iTempProfile].OneBit);
   bbep.fillScreen(BBEP_WHITE);
   for (int i = 0; i < refreshCount; i++) {
     bbep.refresh(REFRESH_FULL); // 2 to 3 minutes of Black/White clearing of the display

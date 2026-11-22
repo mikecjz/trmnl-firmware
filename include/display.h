@@ -54,6 +54,9 @@ typedef struct theBrand {
  */
 void display_init(void);
 
+// bb_epaper setPanelType + board-specific init overrides (X4C UC81xx).
+void display_set_panel_type(uint32_t panel_type);
+
 /**
  * @brief Function to reset the display
  * @param none

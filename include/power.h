@@ -10,6 +10,8 @@
 #define INCLUDE_TCA9535_POWER
 #elif defined(BOARD_TRMNL_GEN2)
 #define INCLUDE_GPIO_POWER
+#elif defined(BOARD_XTEINK_X4_CLASSIC)
+#define INCLUDE_X4C_STAT_POWER
 #endif
 
 /// @brief USB/charger status source. The base class reports UNKNOWN, for
@@ -38,6 +40,22 @@ private:
   uint8_t _pgPin;
   uint8_t _statPin;
 };
+
+#ifdef INCLUDE_X4C_STAT_POWER
+/// @brief Reads the X4 Classic's charge STAT line (GPIO21, active HIGH).
+///        There is no PG/VBUS detect pin on this board, so USB presence is only
+///        reported CONNECTED while the charger says it is charging; otherwise
+///        it stays UNKNOWN rather than guessing DISCONNECTED.
+class X4CStatPower : public BasePower {
+public:
+  explicit X4CStatPower(uint8_t statPin);
+  UsbStatus usbStatus() override;
+  ChargingStatus chargingStatus() override;
+
+private:
+  uint8_t _statPin;
+};
+#endif // INCLUDE_X4C_STAT_POWER
 
 #ifdef INCLUDE_TCA9535_POWER
 class FASTEPD;

@@ -10,7 +10,11 @@ typedef struct dp_tag {
 } DISPLAY_PROFILE;
 
 // 1-bit and 2-bit panel types for each panel set (pDevice->panel_set) and temperature profile (bb_epaper boards only)
-extern const DISPLAY_PROFILE dpList[16][3];
+extern const DISPLAY_PROFILE dpList[19][3];
+
+// Active dpList entry: the probed override when a board has one, else pDevice->panel_set.
+uint8_t active_panel_set_index();
+void set_active_panel_set(uint8_t panel_set);
 
 // Finds DEVICE_MODEL in the supported device list and points pDevice at it
 void hw_config_init(const char *name);

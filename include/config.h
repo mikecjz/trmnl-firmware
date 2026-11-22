@@ -57,6 +57,19 @@
 #else
 #define MAX_IMAGE_SIZE 90000 // largest compressed image we can receive in static RAM
 #endif
+
+// ---- Xteink X4 Classic (X4 v2) -------------------------------------------
+#if defined(BOARD_XTEINK_X4_CLASSIC)
+// The two side keys are GPIO0 and GPIO7. CrossPoint maps 0 = up/previous and
+// 7 = down/next; Papyrix has up = 7 and down = 0. This has NOT been checked by
+// a physical press on the reporter's unit. Flip this one define (or the two
+// GPIO aliases) when the panel test is done; it must not block that test.
+#define X4C_SIDE_KEY_0_IS_UP 1
+#define X4C_SIDE_UP_GPIO    (X4C_SIDE_KEY_0_IS_UP ? 0 : 7)
+#define X4C_SIDE_DOWN_GPIO  (X4C_SIDE_KEY_0_IS_UP ? 7 : 0)
+// Panel/profile selection lives in src/x4c_panel.cpp.
+#endif
+
 #define SLEEP_uS_TO_S_FACTOR 1000000           /* Conversion factor for micro seconds to seconds */
 
 // Different display profiles
@@ -138,7 +151,7 @@
 
 // Battery measurement types
 // BATT_NONE = use fake voltage
-enum { BATT_NONE = 0, BATT_ADC, BATT_BQ27220, BATT_BQ27427, BATT_AXP2101 };
+enum { BATT_NONE = 0, BATT_ADC, BATT_BQ27220, BATT_BQ27427, BATT_AXP2101, BATT_CW2017 };
 
 #ifdef PARALLEL_EPD
 // TRMNL Device structure (slightly different for parallel eink panels)
@@ -194,6 +207,10 @@ enum {
   EPD_42C,
   EPD_42_4CLR,
   EPD_397C,
+  // Xteink X4 Classic: one set per controller the boot probe can resolve.
+  EPD_X4C_SSD1677,
+  EPD_X4C_UC8179,
+  EPD_X4C_UC8279,
 };
 
 /**

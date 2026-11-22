@@ -53,30 +53,70 @@ stock X4C flash, app `xteink_app v7.0.11`, board tag `ESP32S3_X4_CLA`).
   existing power-button (`interrupt_pin` = 3) wake. GPIO1 is treated as the
   board's power latch, matching Papyrix's `PowerConfig{1, true}` and CrossPoint's
   master rail.
+* `src/x4c_panel.cpp` / `include/x4c_panel.h`: factory/`0x70`/default panel
+  resolution, the three `dpList` entries, and the UC8179/UC8279 init tables.
+* `src/battery/cw2017_battery.cpp`: read-only CW2017 gauge (I2C 0x63) with a
+  last-good / nominal-3.9 V fallback; selected by `BATT_CW2017`.
+* `src/power/x4c_stat_power.cpp`: GPIO21 charge STAT (active HIGH) into the
+  existing `ChargingStatus` path.
+* `include/config.h`: `X4C_SIDE_KEY_0_IS_UP`, the single side-key direction
+  define; it still needs one physical press before it is trusted.
+* `docs/xteink-x4c-recovery.md`: ROM-loader recovery, full-flash backup and
+  restore, merged/app-only flash offsets, back-to-stock.
 
-## Open items that block/limit the next milestone
+## Panel resolution (implemented)
 
-1. **Panel controller auto-detection is not ported.** CrossPoint and Papyrix
-   both read command `0x70` back half-duplex on MOSI (no MISO on this board) and
-   pick SSD1677 / UC8179 / UC8279; Papyrix additionally falls back to the OEM
-   `hw_calib/screenType` byte. `bb_epaper` selects a panel by static panel type
-   and has no such read path, so this env uses `EPD_426` (bb_epaper's 4.26"
-   800x480 UC81xx profile) as a placeholder. The real per-unit waveform must be
-   sorted out before trusting a panel test.
-2. **No CW2017 battery driver.** TRMNL supports `BATT_ADC`, `BATT_BQ27220`,
-   `BATT_BQ27427`, `BATT_AXP2101`. The X4C uses CW2017 (0x63) on I2C, which is
-   not one of them, so this env reports `BATT_NONE` (fake voltage) for now.
-   `BATT_ADC` must NOT be used: GPIO0 is a button, not an ADC battery sense.
-3. **Side-key up/down mapping disagrees between the two sources.** freeink
-   maps GPIO0 -> up/previous and GPIO7 -> down/next; Papyrix's `InputConfig`
-   has `up = 7, down = 0`. Confirm on hardware which side is which.
-4. **Power/wake behaviour is unverified on hardware.** Papyrix wakes only on
-   the power button (GPIO3); CrossPoint's boot path also has a non-interrupt
-   input on GPIO4 whose role is still listed as pending. Whether the display
-   rail (GPIO1) and SD power (GPIO6) must be held in deep sleep, and the
-   resulting sleep current, are measurements, not assumptions.
-5. **Flashing discipline.** First flash must be a merged image at 0x0 after a
-   full 16 MB `esptool read_flash` backup. The device's ROM bootloader
-   (303A:1001) is the recovery path; the stock firmware's USB-MSC identity is
-   303A:4002. This TRMNL env builds with `ARDUINO_USB_CDC_ON_BOOT=1`, so the
-   dev build enumerates as USB-CDC, not MSC.
+`src/x4c_panel.cpp` runs before `bb_epaper` takes the SPI bus and resolves the
+controller with the reference implementations' precedence:
+
+1. factory `hw_calib` / `screenType`: 1 or 0x0B -> UC8179, 2 or 0x0C -> UC8279,
+   3 -> SSD1677;
+2. the stock `0x70` VER read, clocked back half-duplex on MOSI, id 0x01/0x40 ->
+   UC8179, 0x02/0x03/0x41/0x42/0x67/0x68/0x69 -> UC8279;
+3. the documented default, UC8279 (every X4C field unit without `hw_calib` has
+   reported an UltraChip part; SSD1677 units are expected to carry screenType 3).
+
+The resolved controller selects a `dpList` entry: `EPD_X4C_SSD1677` uses
+bb_epaper's proven EP426 SSD1677 profile (the C3 X4's panel family), while
+`EPD_X4C_UC8179` and `EPD_X4C_UC8279` share bb_epaper's generic 800x480 UC81xx
+base and load the X4C init tables from `src/x4c_panel.cpp` (ported from
+Papyrix's `Uc8179X4ProDriver` / `Uc8279X4ProDriver`; the UC8279 table omits the
+X4 Pro's PLL command, as the Classic does).
+
+## Battery and charger (implemented)
+
+- `BATT_CW2017` / `Cw2017Battery` reads the gauge at I2C 0x63 on SDA 39 / SCL 38
+  at 400 kHz. The Classic keeps its factory BATINFO calibration, so the driver
+  never writes the 80-byte profile; it validates VERSION (`(v & 0xFD) == 0x0D`)
+  and reads VCELL. If the gauge does not answer, the last good value is reused;
+  before any reading it reports a nominal 3.9 V with a warning rather than
+  failing the boot. `BATT_ADC` is wrong on this board: GPIO0 is a button.
+- `X4CStatPower` reads GPIO21 `STAT` (active HIGH) and feeds the existing
+  `ChargingStatus` path, so `Battery-Charging` and the status screen reflect it.
+  There is no PG/VBUS pin, so USB presence is reported `CONNECTED` only while
+  charging and `UNKNOWN` otherwise — no invented DISCONNECTED.
+
+## Open items that still need the unit
+
+1. **Panel geometry / waveform.** The UC81xx init sends the 800x600 addressed
+   resolution the X4 Pro/Classic panels use (800 visible x 480, 120 gate
+   offset), but the X4C drivers add gate-offset and OTP-waveform handling that
+   `bb_epaper`'s generic UC81xx write path does not reproduce yet. The first
+   panel test will prove controller detection and whether an image appears; it
+   is not yet a final geometry/waveform validation.
+2. **Side-key up/down mapping disagrees between the two sources.** freeink maps
+   GPIO0 -> up/previous and GPIO7 -> down/next; Papyrix has `up = 7, down = 0`.
+   One `#define` (`X4C_SIDE_KEY_0_IS_UP`) in `include/config.h` makes this a
+   one-line change after a physical press. It does not block the panel test.
+3. **Power/wake behaviour is unverified on hardware.** Papyrix wakes only on the
+   power button (GPIO3); CrossPoint's boot path has a non-interrupt input on
+   GPIO4 whose role is still pending. Whether the GPIO1 rail and SD power GPIO6
+   must be held in deep sleep, and the resulting sleep current, are measurements.
+4. **`LIGHT_SLEEP` vs `DEEP_SLEEP`** for the mono panel is intentionally still
+   open: `display_sleep()` uses `LIGHT_SLEEP` for mono panels, and the X4C may
+   need `DEEP_SLEEP` so the booster does not drain the battery. Documented here
+   until there is a measurement; not changed on a guess.
+5. **Flashing discipline.** See `docs/xteink-x4c-recovery.md`: full 16 MB backup
+   first, merged image at 0x0, app-only at 0x20000, ROM loader `303A:1001` is the
+   recovery path. Stock firmware is `303A:4002` USB-MSC; this build enumerates as
+   USB-CDC.

@@ -126,6 +126,12 @@ void startBoardHardware(const WakeContext &wake, uint32_t init_time) {
   if (double_click) button_wake_run_special_function();
   // Read the battery voltage BEFORE the display or WiFi is turned on
   battery_voltage = battery().readVoltage(pDevice);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // GPIO21 STAT is the only charger signal on this board; feed it into the same
+  // Battery-Charging / status path the touchbar boards use.
+  battery_charging = (power().chargingStatus() == ChargingStatus::CHARGING);
+  Log_info("BATTERY CHARGING: %s", battery_charging ? "YES" : "NO");
+#endif
 
   // EPD init
   // EPD clear

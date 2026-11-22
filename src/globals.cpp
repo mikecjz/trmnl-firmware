@@ -45,5 +45,6 @@ uint32_t panel_rev = 0;
 // Set once during bl_init, used by download helpers and getWiFiStatus()
 Modem *g_modem = nullptr;
 battery_count_t battery_count = BATTERY_NONE;
-bool battery_charging = false;
 #endif // BOARD_TRMNL_X
+
+bool battery_charging = false;

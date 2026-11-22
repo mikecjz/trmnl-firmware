@@ -42,6 +42,7 @@ extern bool log_retry;           // need to log connection retry
 extern unsigned long startup_time; // millis() at boot, for the wake time statistics
 extern uint32_t time_since_sleep;
 extern float battery_voltage; // read at wake, before the display and WiFi draw current
+extern bool battery_charging; // charger STAT resolved at wake (TRMNL X / X4 Classic)
 extern esp_sleep_wakeup_cause_t wakeup_reason;
 extern SPECIAL_FUNCTION special_function;
 extern bool special_function_chosen; // picked on the device (TRMNL X touch menu), not the saved one
@@ -62,5 +63,4 @@ extern uint32_t panel_rev; // EPD revision read by get_panel_rev(); 0 = unknown/
 // --- TRMNL X hardware ---
 extern Modem *g_modem;
 extern battery_count_t battery_count;
-extern bool battery_charging;
 #endif // BOARD_TRMNL_X
