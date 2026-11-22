@@ -12,6 +12,7 @@
 #include "trmnl_log.h"
 
 #ifdef BOARD_XTEINK_X4_CLASSIC
+#include <esp_log.h>
 #include <esp_sleep.h>
 
 // The mask of RTC GPIOs that triggered the ext1 wake. Zero when this boot was not
@@ -23,6 +24,11 @@ static uint64_t x4c_wake_key_mask(void) {
   return esp_sleep_get_ext1_wakeup_status();
 }
 
+// RTC memory survives deep sleep and a USB-triggered chip reset, so a console
+// capture that resets the chip can still report the last natural wake.
+RTC_DATA_ATTR static int x4c_last_wake_reason = 0;
+RTC_DATA_ATTR static uint64_t x4c_last_wake_mask = 0;
+
 bool button_wake_came_from_refresh_key(void) { return (x4c_wake_key_mask() & X4C_REFRESH_KEY_MASK) != 0; }
 
 // A wake that was not a button wake at all counts as "not the refresh key", so the
@@ -30,6 +36,17 @@ bool button_wake_came_from_refresh_key(void) { return (x4c_wake_key_mask() & X4C
 bool button_wake_came_from_power_key(void) {
   const uint64_t mask = x4c_wake_key_mask();
   return mask == 0 || (mask & (1ULL << X4C_KEY_POWER_GPIO)) != 0;
+}
+
+void button_log_wake_source(void) {
+  const uint64_t mask = x4c_wake_key_mask();
+  esp_log_write(ESP_LOG_WARN, "X4C", "wake: reason=%d mask=0x%03llx prev_reason=%d prev_mask=0x%03llx\n",
+                (int)wakeup_reason, (unsigned long long)mask, x4c_last_wake_reason,
+                (unsigned long long)x4c_last_wake_mask);
+  if (mask != 0) {
+    x4c_last_wake_reason = (int)wakeup_reason;
+    x4c_last_wake_mask = mask;
+  }
 }
 #endif // BOARD_XTEINK_X4_CLASSIC
 

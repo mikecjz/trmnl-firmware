@@ -17,6 +17,8 @@
 #include <trmnl_log.h>
 
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
+#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 
@@ -56,6 +58,42 @@ static uint64_t timerSleepUs([[maybe_unused]] bool keep_timer) {
  * @param keep_timer sleep until the last sleep's timer, not for the refresh interval
  * @return none
  */
+#ifdef BOARD_XTEINK_X4_CLASSIC
+// Arms the X4 Classic wake keys for deep sleep. Keys that read low are left out
+// of the ext1 mask: a key that is held down (stuck, or pressed by a stand) stays
+// low after the chip sleeps, so ext1 would wake it again immediately and turn
+// every sleep into a logo/dashboard boot loop. Each pin is logged so a capture
+// taken through the sleep shows the levels that were armed.
+static void arm_x4c_wake_keys(void) {
+  static const uint8_t keys[] = {X4C_KEY_POWER_GPIO,  X4C_KEY_LEFT_GPIO,    X4C_KEY_RIGHT_GPIO,
+                                 X4C_KEY_CONFIRM_GPIO, X4C_KEY_BACK_GPIO};
+  for (uint8_t pin : keys) {
+    pinMode(pin, INPUT_PULLUP);
+    // The digital pull-up is lost with the digital domain in deep sleep; the RTC
+    // pad pull-up is what keeps a released key high while the chip sleeps.
+    rtc_gpio_pullup_en((gpio_num_t)pin);
+    rtc_gpio_pulldown_dis((gpio_num_t)pin);
+  }
+
+  uint64_t wake_mask = 0;
+  for (uint8_t pin : keys) {
+    if (digitalRead(pin) == HIGH) {
+      wake_mask |= 1ULL << pin;
+    }
+  }
+  esp_log_write(ESP_LOG_WARN, "X4C", "sleep: keys p3=%d p5=%d p2=%d p8=%d p9=%d mask=0x%03llx\n",
+                digitalRead(X4C_KEY_POWER_GPIO), digitalRead(X4C_KEY_LEFT_GPIO), digitalRead(X4C_KEY_RIGHT_GPIO),
+                digitalRead(X4C_KEY_CONFIRM_GPIO), digitalRead(X4C_KEY_BACK_GPIO),
+                (unsigned long long)wake_mask);
+
+  if (wake_mask == 0) {
+    esp_log_write(ESP_LOG_WARN, "X4C", "sleep: every wake key is held low, timer wake only\n");
+    return;
+  }
+  esp_sleep_enable_ext1_wakeup_io(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+}
+#endif // BOARD_XTEINK_X4_CLASSIC
+
 static void enterSleep(bool keep_timer) {
   Log.info("%s [%d]: go to sleep\r\n", __FILE__, __LINE__);
   submitStoredLogs();
@@ -108,15 +146,7 @@ static void enterSleep(bool keep_timer) {
 #ifdef BOARD_TRMNL_X
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
 #elif defined(BOARD_XTEINK_X4_CLASSIC)
-  // Power plus the four bottom keys, which are the manual refresh button: ext1
-  // takes the RTC GPIO mask, so a press of any of them wakes the unit for a
-  // fetch. Every wake key needs its pull-up before the chip sleeps.
-  for (uint8_t pin = 0; pin < 32; ++pin) {
-    if (X4C_WAKE_KEY_MASK & (1ULL << pin)) {
-      pinMode(pin, INPUT_PULLUP);
-    }
-  }
-  esp_sleep_enable_ext1_wakeup_io(X4C_WAKE_KEY_MASK, ESP_EXT1_WAKEUP_ANY_LOW);
+  arm_x4c_wake_keys();
 #else
   esp_sleep_enable_ext0_wakeup((gpio_num_t)pDevice->interrupt_pin, 0);
 #endif
@@ -196,12 +226,7 @@ void goToSleepButtonOnly(void) {
 #ifdef BOARD_TRMNL_X
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
 #elif defined(BOARD_XTEINK_X4_CLASSIC)
-  for (uint8_t pin = 0; pin < 32; ++pin) {
-    if (X4C_WAKE_KEY_MASK & (1ULL << pin)) {
-      pinMode(pin, INPUT_PULLUP);
-    }
-  }
-  esp_sleep_enable_ext1_wakeup_io(X4C_WAKE_KEY_MASK, ESP_EXT1_WAKEUP_ANY_LOW);
+  arm_x4c_wake_keys();
 #else
   esp_sleep_enable_ext0_wakeup((gpio_num_t)pDevice->interrupt_pin, 0);
 #endif

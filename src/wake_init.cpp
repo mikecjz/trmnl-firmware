@@ -110,6 +110,9 @@ void openPreferences(void) {
 #ifndef BOARD_TRMNL_X
 void startBoardHardware(const WakeContext &wake, uint32_t init_time) {
   bool double_click = false;
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  button_log_wake_source();
+#endif
   if (wake.gpio) {
     Log_info("GPIO wakeup detected (%d)", wake.reason);
 #ifdef BOARD_XTEINK_X4_CLASSIC

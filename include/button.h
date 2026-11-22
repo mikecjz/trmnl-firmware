@@ -19,4 +19,7 @@ void button_wake_run_special_function(void);
 // is still counted.
 bool button_wake_came_from_refresh_key(void);
 bool button_wake_came_from_power_key(void);
+// One-line boot diagnostic. Carries the previous natural wake in RTC memory,
+// because opening the USB console resets the chip and loses the live wake cause.
+void button_log_wake_source(void);
 #endif
