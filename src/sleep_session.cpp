@@ -81,10 +81,10 @@ static void arm_x4c_wake_keys(void) {
       wake_mask |= 1ULL << pin;
     }
   }
-  esp_log_write(ESP_LOG_WARN, "X4C", "sleep: keys p3=%d p5=%d p2=%d p8=%d p9=%d mask=0x%03llx\n",
+  esp_log_write(ESP_LOG_WARN, "X4C", "sleep: keys p3=%d p5=%d p2=%d p8=%d p9=%d mask=0x%03llx draws=%lu\n",
                 digitalRead(X4C_KEY_POWER_GPIO), digitalRead(X4C_KEY_LEFT_GPIO), digitalRead(X4C_KEY_RIGHT_GPIO),
                 digitalRead(X4C_KEY_CONFIRM_GPIO), digitalRead(X4C_KEY_BACK_GPIO),
-                (unsigned long long)wake_mask);
+                (unsigned long long)wake_mask, (unsigned long)x4c_draw_count);
 
   if (wake_mask == 0) {
     esp_log_write(ESP_LOG_WARN, "X4C", "sleep: every wake key is held low, timer wake only\n");

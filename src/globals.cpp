@@ -43,6 +43,12 @@ RTC_DATA_ATTR bool bCanDoPartial = false;
 uint32_t iTempProfile;
 uint32_t panel_rev = 0;
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+// Counts full panel updates in the current boot. RTC memory keeps the previous
+// boot's count readable on the next boot (the USB console resets the chip).
+RTC_DATA_ATTR uint32_t x4c_draw_count = 0;
+#endif
+
 #ifdef BOARD_TRMNL_X
 // --- TRMNL X hardware ---
 // Set once during bl_init, used by download helpers and getWiFiStatus()

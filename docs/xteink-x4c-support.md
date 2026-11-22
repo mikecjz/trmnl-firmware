@@ -111,17 +111,23 @@ How the manual refresh works:
    sleep time — held, stuck, or pressed by a stand — is left out of that sleep's
    ext1 mask for the same reason; if none are released the wake is timer-only.
    The five levels and the armed mask are logged as
-   `X4C: sleep: keys p3=… p5=… p2=… p8=… p9=… mask=…`.
+   `X4C: sleep: keys p3=… p5=… p2=… p8=… p9=… mask=… draws=…`, where `draws` is
+   the number of full panel updates in that boot.
 2. `src/button.cpp` reads `esp_sleep_get_ext1_wakeup_status()` to learn which key
    woke the unit; that works even for a tap released before boot reaches the
    read. A bottom-key-only wake does not run the Power press-duration menu. A
-   `X4C: wake: reason=… mask=… prev_reason=… prev_mask=…` line records the
-   previous natural wake in RTC memory, because opening the USB console resets
-   the chip and loses the live wake cause.
+   `X4C: wake: reason=… mask=… prev_reason=… prev_mask=… prev_draws=…` line
+   records the previous natural wake (and its draw count) in RTC memory, because
+   opening the USB console resets the chip and loses the live wake cause. On a
+   refresh-key wake `prev_draws=1` means the logo frame was skipped.
 3. `src/wake_init.cpp` sets the `force_full_refresh` flag instead.
-4. `src/display_session.cpp` skips the "same filename as last wake, keep the
+4. Because that flag is set before the boot's first draw, `src/bl.cpp` also skips
+   `showWakeLogo()` on a refresh-key wake: the press goes straight to the fetch
+   with the previous dashboard left on the panel, then one full refresh. Power
+   and cold boots still show the logo.
+5. `src/display_session.cpp` skips the "same filename as last wake, keep the
    screen" short-circuit, so the cached image is re-sent to the panel.
-5. `src/display.cpp` forces `REFRESH_FULL` for that wake. On the X4C the UC8279
+6. `src/display.cpp` forces `REFRESH_FULL` for that wake. On the X4C the UC8279
    path is already a full flash (`x4c_uc8279_full_update()`), so the flag mainly
    documents intent and keeps the behaviour correct if partial updates are added.
 

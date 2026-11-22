@@ -40,9 +40,15 @@ bool button_wake_came_from_power_key(void) {
 
 void button_log_wake_source(void) {
   const uint64_t mask = x4c_wake_key_mask();
-  esp_log_write(ESP_LOG_WARN, "X4C", "wake: reason=%d mask=0x%03llx prev_reason=%d prev_mask=0x%03llx\n",
+  // The previous boot's panel-update count is still in RTC memory. One update on
+  // a refresh-key wake means the logo frame was skipped; two would mean it was
+  // drawn and then covered by the dashboard.
+  const uint32_t prev_draws = x4c_draw_count;
+  x4c_draw_count = 0;
+  esp_log_write(ESP_LOG_WARN, "X4C",
+                "wake: reason=%d mask=0x%03llx prev_reason=%d prev_mask=0x%03llx prev_draws=%lu\n",
                 (int)wakeup_reason, (unsigned long long)mask, x4c_last_wake_reason,
-                (unsigned long long)x4c_last_wake_mask);
+                (unsigned long long)x4c_last_wake_mask, (unsigned long)prev_draws);
   if (mask != 0) {
     x4c_last_wake_reason = (int)wakeup_reason;
     x4c_last_wake_mask = mask;

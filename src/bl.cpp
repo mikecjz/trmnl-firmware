@@ -43,7 +43,15 @@ void bl_init(void) {
   WakeContext wake = readWakeContext();
   openPreferences();
   startBoardHardware(wake, init_time);
-  if (wake.reason != ESP_SLEEP_WAKEUP_TIMER) showWakeLogo();
+#ifdef X4C_LOGO_SKIP_PROBE
+  // Diagnostic build only: take the manual-refresh path on this boot so the
+  // no-logo/single-draw behaviour can be checked without a physical key press.
+  force_full_refresh = true;
+#endif
+  // A manual refresh (the X4C refresh keys) goes straight to the fetch: the logo
+  // is an intermediate screen the user does not want to see. Power wakes and cold
+  // boots keep it, and the full-refresh force is untouched.
+  if (wake.reason != ESP_SLEEP_WAKEUP_TIMER && !force_full_refresh) showWakeLogo();
   logVersions();
 
   wifiSessionConnect(wake.showErrorsNow);

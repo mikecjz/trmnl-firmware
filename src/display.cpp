@@ -105,7 +105,9 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
       return false;
     }
     bCanDoPartial = false;  // every update is a full OTP-waveform flash
-    return x4c_uc8279_full_update(fb, display_width(), display_height());
+    const bool ok = x4c_uc8279_full_update(fb, display_width(), display_height());
+    if (ok) x4c_draw_count++;
+    return ok;
   }
 #endif
 #if defined(BOARD_SEEED_RETERMINAL_E1002) || defined(BOARD_SEEED_RETERMINAL_E1004) || defined(BOARD_TRMNL_GEN2)

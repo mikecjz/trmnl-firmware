@@ -60,6 +60,10 @@ extern RTC_DATA_ATTR bool bCanDoPartial; // RTC
 extern uint32_t iTempProfile;
 extern uint32_t panel_rev; // EPD revision read by get_panel_rev(); 0 = unknown/not read
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+extern RTC_DATA_ATTR uint32_t x4c_draw_count; // RTC: full panel updates in the current boot
+#endif
+
 #ifdef BOARD_TRMNL_X
 // --- TRMNL X hardware ---
 extern Modem *g_modem;
