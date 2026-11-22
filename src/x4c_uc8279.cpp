@@ -122,6 +122,34 @@ bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height) 
   }
   const int stride = width / 8;
 
+#ifdef X4C_MARKER_FRAME
+  // Marker frame for measuring the source-row -> glass mapping. Uploaded through
+  // the unchanged transport. Layout (480 rows, 800 px):
+  //   - full-width 1 px black row at y = 0, 40, 80 ... 440 (12 bands)
+  //   - inside each band, rows y+3..y+6 are black from x=0 to x=40*(k+1),
+  //     so the bar length encodes the band index k (40 px .. 480 px)
+  //   - 4 px border, plus a 40x40 solid block at the bottom-right only
+  static uint8_t marker[100 * 480];
+  static bool marker_ready = false;
+  if (!marker_ready) {
+    memset(marker, 0xFF, sizeof(marker));
+    auto hline = [&](int y, int x0, int x1) {
+      for (int x = x0; x <= x1 && x < 800; x++) marker[y * 100 + (x >> 3)] &= (uint8_t)~(0x80 >> (x & 7));
+    };
+    for (int y = 0; y < 480; y += 40) {
+      hline(y, 0, 799);
+      const int k = y / 40;
+      for (int yy = y + 3; yy <= y + 6 && yy < 480; yy++) hline(yy, 0, 40 * (k + 1) - 1);
+    }
+    for (int y = 0; y < 4; y++) { hline(y, 0, 799); hline(479 - y, 0, 799); }
+    for (int y = 0; y < 480; y++) { hline(y, 0, 3); hline(y, 796, 799); }
+    for (int y = 436; y < 476; y++) hline(y, 756, 795);
+    marker_ready = true;
+    out("MARKER frame active: bands every 40 rows, bar length = 40*(k+1)");
+  }
+  fb = marker;
+#endif
+
   s_sck = pDevice->epd_sck_pin;
   s_mosi = pDevice->epd_mosi_pin;
   s_cs = pDevice->epd_cs_pin;
