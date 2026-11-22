@@ -36,6 +36,12 @@ const TRMNL_DEVICE device_list[] =
   "og_gen2",       6,    1,     4,   2,    5,   0,    23,   10,   3,     0xff, 0xff,    0xff,   BATT_BQ27427,  EPD_75, // fake battery == 0xff
   "og_gen2_4clr",  6,    1,     4,   2,    5,   0,    23,   10,   3,     0xff, 0xff,    0xff,   BATT_BQ27427,  EPD_75_4CLR, // fake battery == 0xff
   "xteink_x4",     8,    10,    21,  5,    4,   6,    0xff, 0xff, 3,     0,    0xff,    0xff,   BATT_ADC,  EPD_426,
+  // Xteink X4 Classic (X4 v2): display SCLK/MOSI/CS/RST/DC/BUSY = 12/11/13/10/14/18,
+  // power button = GPIO3, CW2017 gauge + BM8563 RTC on I2C SDA39/SCL38 @0x63/0x51.
+  // BATT_NONE until the CW2017 driver exists (TRMNL has ADC/BQ27220/BQ27427/AXP2101 only).
+  // EPD_426 is a placeholder: the unit's controller (SSD1677/UC8179/UC8279) is probed at boot
+  // in CrossPoint/Papyrix and still needs a port here.
+  "xteink_x4_classic", 12, 11, 13, 10, 14, 18, 39, 38, 3, 0xff, 0xff, 0xff, BATT_NONE, EPD_426,
   "xteink_x3",     8,    10,    21,  5,    4,   6,    20,   0,    3,     0xff, 0xff,    0xff,   BATT_BQ27220,  EPD_368,
   "waveshare",     13,   14,    15,  26,   27,  25,   0xff, 0xff, 33,    0xff, 0xff,    0xff,   BATT_ADC,  EPD_75,
   "waveshare_397", 11,   12,    10,  46,   9,   3,    41,   42,   0,     0xff, 0xff,    0xff,   BATT_AXP2101,  EPD_397,

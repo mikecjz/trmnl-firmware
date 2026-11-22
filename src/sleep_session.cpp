@@ -126,6 +126,16 @@ static void enterSleep(bool keep_timer) {
   gpio_deep_sleep_hold_en(); // Needed to keep the battery power enabled during RTC sleep
 #endif
 #endif
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // GPIO1 is the X4 Classic's master peripheral/panel rail (CrossPoint's freeink-sdk
+  // X4C profile, Papyrix's x4c power latch). Hold it HIGH across deep sleep so the
+  // timer wakeup and the power-button wakeup both still work. Sleep current with the
+  // rail held has not been measured yet; that is a hardware milestone.
+  pinMode(1, OUTPUT);
+  digitalWrite(1, HIGH);
+  gpio_hold_en(GPIO_NUM_1);
+  gpio_deep_sleep_hold_en();
+#endif // BOARD_XTEINK_X4_CLASSIC
 #ifdef BOARD_ZECTRIX_NOTE4
   digitalWrite(6, LOW); // disable the EPD power
   gpio_hold_en(GPIO_NUM_17); // MOSFET enabling the battery power
@@ -183,6 +193,12 @@ void goToSleepButtonOnly(void) {
 #endif
 #ifdef BOARD_XTEINK_X4
   gpio_hold_en(GPIO_NUM_13);
+  gpio_deep_sleep_hold_en();
+#endif
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  pinMode(1, OUTPUT);
+  digitalWrite(1, HIGH);
+  gpio_hold_en(GPIO_NUM_1);
   gpio_deep_sleep_hold_en();
 #endif
   esp_deep_sleep_start();

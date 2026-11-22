@@ -1,0 +1,60 @@
+name: x4c-build
+
+# Fork-only CI: proves the stock S3 target still builds and produces the
+# Xteink X4 Classic app image. The upstream workflows continue to own the
+# shipping TRMNL builds; this one exists so each X4C milestone leaves a
+# downloadable .bin behind instead of a local-only .pio/build tree.
+
+on:
+  push:
+    branches: ["xteink-x4-classic"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: TRMNL_X
+            artifact: trmnl-x-app
+          - env: xteink_x4_classic
+            artifact: xteink-x4-classic-app
+
+    name: build (${{ matrix.env }})
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+          key: ${{ runner.os }}-x4c-pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-x4c-pio-${{ matrix.env }}-
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio==6.1.19
+
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            .pio/build/${{ matrix.env }}/firmware.bin
+            .pio/build/${{ matrix.env }}/bootloader.bin
+            .pio/build/${{ matrix.env }}/partitions.bin
+          if-no-files-found: error
+          retention-days: 30
