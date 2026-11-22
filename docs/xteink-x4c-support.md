@@ -93,19 +93,19 @@ device or OS level to reuse.
 
 | Button | GPIO | Behaviour |
 |---|---|---|
-| Side up / side down | 0 / 7 | **Manual refresh**: wakes the unit, fetches `/api/display`, redraws with a forced full panel update |
+| Bottom left / right / confirm / back | 5 / 2 / 8 / 9 | **Manual refresh**: wakes the unit, fetches `/api/display`, redraws with a forced full panel update |
 | Power | 3 | Wake + the existing press-duration menu (long press opens the settings portal, double click runs the server's special function) |
-| Bottom left / right / confirm / back | 5 / 2 / 8 / 9 | Wired and active low; not used by the dashboard yet |
+| Side up / side down | 0 / 7 | Wired and active low; not used by the dashboard |
 
 How the manual refresh works:
 
 1. `src/sleep_session.cpp` arms **ext1** on the RTC GPIO mask in
-   `X4C_WAKE_KEY_MASK` (power + both side keys) instead of ext0 on Power alone,
-   so a side-key press wakes the chip. `src/pins.cpp` gives every wake key a
-   pull-up.
+   `X4C_WAKE_KEY_MASK` (power + the four bottom keys) instead of ext0 on Power
+   alone, so a bottom-key press wakes the chip. `src/pins.cpp` gives every wake
+   key a pull-up.
 2. `src/button.cpp` reads `esp_sleep_get_ext1_wakeup_status()` to learn which key
    woke the unit; that works even for a tap released before boot reaches the
-   read. A side-key-only wake does not run the Power press-duration menu.
+   read. A bottom-key-only wake does not run the Power press-duration menu.
 3. `src/wake_init.cpp` sets the `force_full_refresh` flag instead.
 4. `src/display_session.cpp` skips the "same filename as last wake, keep the
    screen" short-circuit, so the cached image is re-sent to the panel.
@@ -119,8 +119,8 @@ filename and downloads normally; an unchanged one keeps the same filename and is
 redrawn from flash.
 
 To bind the action to a different key, change `X4C_REFRESH_KEY_MASK` in
-`include/config.h`. The remaining keys are `X4C_KEY_LEFT_GPIO`,
-`X4C_KEY_RIGHT_GPIO`, `X4C_KEY_CONFIRM_GPIO` and `X4C_KEY_BACK_GPIO`.
+`include/config.h`. The remaining keys are `X4C_SIDE_UP_GPIO` and
+`X4C_SIDE_DOWN_GPIO`.
 
 ## Battery and charger (implemented)
 

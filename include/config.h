@@ -74,13 +74,16 @@
 #define X4C_KEY_RIGHT_GPIO   2
 #define X4C_KEY_CONFIRM_GPIO 8
 #define X4C_KEY_BACK_GPIO    9
-// Manual refresh button: pressing a side key wakes the unit, fetches
-// /api/display and redraws the panel with a forced full refresh, even when the
-// screen content has not changed. Power keeps its own press-duration menu
-// (long press opens the settings portal). Change this mask to move the action
-// to another button.
-#define X4C_REFRESH_KEY_MASK ((1ULL << X4C_SIDE_UP_GPIO) | (1ULL << X4C_SIDE_DOWN_GPIO))
-#define X4C_WAKE_KEY_MASK    (X4C_REFRESH_KEY_MASK | (1ULL << X4C_KEY_POWER_GPIO))
+// Manual refresh button: pressing any of the four bottom keys wakes the unit,
+// fetches /api/display and redraws the panel with a forced full refresh, even
+// when the screen content has not changed. The side keys are deliberately not
+// part of it; they stay unused by the dashboard. Power keeps its own
+// press-duration menu (long press opens the settings portal). Change this mask
+// to move the action to another button.
+#define X4C_REFRESH_KEY_MASK                                                                                           \
+  ((1ULL << X4C_KEY_LEFT_GPIO) | (1ULL << X4C_KEY_RIGHT_GPIO) | (1ULL << X4C_KEY_CONFIRM_GPIO) |                       \
+   (1ULL << X4C_KEY_BACK_GPIO))
+#define X4C_WAKE_KEY_MASK (X4C_REFRESH_KEY_MASK | (1ULL << X4C_KEY_POWER_GPIO))
 // Panel/profile selection lives in src/x4c_panel.cpp.
 #endif
 

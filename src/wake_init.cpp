@@ -113,9 +113,10 @@ void startBoardHardware(const WakeContext &wake, uint32_t init_time) {
   if (wake.gpio) {
     Log_info("GPIO wakeup detected (%d)", wake.reason);
 #ifdef BOARD_XTEINK_X4_CLASSIC
-    // The side keys are the manual refresh button: wake, fetch /api/display and
-    // redraw with a forced full refresh. The power button keeps its press-duration
-    // menu, so only side-key-only wakes skip read_button_presses().
+    // The four bottom keys are the manual refresh button: wake, fetch
+    // /api/display and redraw with a forced full refresh. The power button keeps
+    // its press-duration menu, so only bottom-key-only wakes skip
+    // read_button_presses().
     const bool refresh_key = button_wake_came_from_refresh_key();
     if (refresh_key) {
       force_full_refresh = true;
