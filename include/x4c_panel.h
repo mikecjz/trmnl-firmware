@@ -1,8 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-
 #include <config.h>
+#include <stdint.h>
 
 class BBEPAPER;
 

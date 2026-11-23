@@ -17,7 +17,11 @@
 #include <x4c_panel.h>
 
 #ifdef BOARD_XTEINK_X4_CLASSIC
+#include <esp_sleep.h>
+#include <filesystem.h>
 #include <x4c_uc8279.h>
+
+#include "displayed_image.h"
 #endif
 
 #include "battery.h"
@@ -94,19 +98,64 @@ static void display_apply_light_sleep(uint8_t enabled) {
 #endif
 }
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+// Snapshot of the cached image that produced the frame on the glass. It is
+// read BEFORE the new image is decoded, into static memory on purpose: the
+// ~43 KB PNG decoder the partial transport needs later must be able to reuse
+// the block the new-image decode just freed, without a small heap allocation
+// (or a second framebuffer) fragmenting it. This build has PSRAM disabled, and
+// a 48 KB allocation failing here is what left the panel blank on the first
+// cut of this change.
+static uint8_t s_x4c_prev_png[16384];
+static int s_x4c_prev_png_size = 0;
+
+static void x4c_preload_previous_png(void) {
+  s_x4c_prev_png_size = 0;
+  if (!x4c_uc8279_baseline_valid()) return; // the first paint is a full flash
+  const char *path = DisplayedImage::get();
+  if (path == nullptr || path[0] == '\0') return;
+  const int size = filesystem_file_size(path);
+  if (size <= 0 || size > static_cast<int>(sizeof(s_x4c_prev_png))) return;
+  if (!filesystem_read_from_file(path, s_x4c_prev_png, static_cast<size_t>(size))) return;
+  s_x4c_prev_png_size = size;
+}
+#endif // BOARD_XTEINK_X4_CLASSIC
+
 bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t plane) {
 #ifdef BOARD_XTEINK_X4_CLASSIC
-  // The X4C UC8279 needs a gate-offset-aware upload plus a white old-plane seed
+  // The X4C UC8279 needs a gate-offset-aware upload plus an explicit old plane
   // and the reference trigger sequence; bb_epaper's generic path cannot do it.
   if (x4c_uc8279_active()) {
-    const uint8_t *fb = static_cast<const uint8_t *>(bbep.getBuffer());
+    uint8_t *fb = static_cast<uint8_t *>(bbep.getBuffer());
     if (fb == nullptr) {
       Log_error("display_update_epaper: no framebuffer");
       return false;
     }
-    bCanDoPartial = false;  // every update is a full OTP-waveform flash
-    const bool ok = x4c_uc8279_full_update(fb, display_width(), display_height());
+    const uint16_t w = display_width();
+    const uint16_t h = display_height();
+
+    // A full OTP flash is unconditional for a manual (hard) refresh, the
+    // server's maximum_compatibility, the boot/first paint and the every-Nth
+    // ghosting backstop (choose_refresh_mode() turns all of those into
+    // REFRESH_FULL). Everything else is a non-flashing DU partial over the
+    // changed bounding box; the transport rebuilds the previous frame from the
+    // cached image and diffs it on-device.
+    const bool force_full = refreshMode == REFRESH_FULL || force_full_refresh || !x4c_uc8279_baseline_valid();
+    bool ok = false;
+    bool fb_intact = true;  // the partial transport overwrites `fb` once it starts
+    if (!force_full && s_x4c_prev_png_size > 0) {
+      const X4cPartialResult result = x4c_uc8279_partial_update(fb, s_x4c_prev_png, s_x4c_prev_png_size, w, h);
+      if (result == X4cPartialResult::Failed) fb_intact = false;
+      ok = result == X4cPartialResult::Done;
+    }
+    s_x4c_prev_png_size = 0; // the snapshot is consumed by one paint
+    if (!ok && fb_intact) {
+      // No trustworthy previous frame (boot, lost cache, wake logo): the
+      // controller cannot diff, so take the flash rather than risk corruption.
+      ok = x4c_uc8279_full_update(fb, w, h);
+    }
     if (ok) x4c_draw_count++;
+    bCanDoPartial = ok && x4c_uc8279_baseline_valid();
     return ok;
   }
 #endif
@@ -201,6 +250,12 @@ void display_init(void) {
   // The probe bit-bangs MOSI; get_panel_rev() below re-reads it later for the
   // Panel-Rev header, and bb_epaper's initIO then takes the bus back.
   x4c_detect_panel(pDevice);
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
+    // Cold boot or a software reset (OTA, crash): the panel RAM and this RTC
+    // baseline are not guaranteed to agree. Start from the known clean full
+    // flash instead of trusting a cached image.
+    x4c_uc8279_invalidate_baseline();
+  }
 #endif
 
     // Read the panel ID after any board-specific power/CS setup, but before bb_epaper takes over the SPI pins.
@@ -355,7 +410,7 @@ void display_reset(void) {
   bbep.fullUpdate();
 #endif
   Log_info("e-Paper Clear end");
-    // DEV_Delay_ms(500);
+  // DEV_Delay_ms(500);
 }
 
 /**
@@ -396,7 +451,7 @@ static bool draw_image(uint8_t *image_buffer, int data_size, int *pRefreshMode, 
   } else // uncompressed BMP or Group5 compressed image
   {
     if (*(uint16_t *)image_buffer == BB_BITMAP_MARKER) {
-            // G5 compressed image
+      // G5 compressed image
       BB_BITMAP *pBBB = (BB_BITMAP *)image_buffer;
 #ifdef BB_EPAPER
       bbep.setMemoryMode(BBEP_MODE_1BPP); // use 1-bit mode to save memory
@@ -406,9 +461,9 @@ static bool draw_image(uint8_t *image_buffer, int data_size, int *pRefreshMode, 
       }
       bAlloc = true;
 #endif
-        //    int x = (width - pBBB->width)/2;
-        //    int y = (height - pBBB->height)/2; // center it
-        // place it in the lower right corner
+      //    int x = (width - pBBB->width)/2;
+      //    int y = (height - pBBB->height)/2; // center it
+      // place it in the lower right corner
       int x = (width - pBBB->width);
       int y = (height - pBBB->height);
       if (x > 0 || y > 0) // only clear if the image is smaller than the display
@@ -421,7 +476,7 @@ static bool draw_image(uint8_t *image_buffer, int data_size, int *pRefreshMode, 
                                 DISPLAY_BATTERY_ICON_MARGIN);
 #endif // BOARD_TRMNL_X
     } else {
-         // This work-around is due to a lack of RAM; the correct method would be to use loadBMP()
+      // This work-around is due to a lack of RAM; the correct method would be to use loadBMP()
       const int iBmpWidth = image_buffer[18] | (image_buffer[19] << 8);
       const int iBmpHeight = image_buffer[22] | (image_buffer[23] << 8);
       bmpNormalizePolarity(image_buffer, image_buffer + 62,
@@ -461,16 +516,18 @@ static int choose_refresh_mode(int iRefreshMode, bool *pWait) {
   if (force_full_refresh) {
     // The refresh key was pressed: clear ghosting with one full panel refresh,
     // even when the image is unchanged. display_session.cpp has already skipped
-    // the unchanged-image short-circuit for this wake.
+    // the unchanged-image short-circuit for this wake. The UC8279 path treats
+    // this as an unconditional OTP flash; restart the partial/ghosting counter.
     Log_info("%s [%d]: Manual refresh: forcing full refresh\r\n", __FILE__, __LINE__);
     iRefreshMode = REFRESH_FULL;
+    iUpdateCount = 0;
   } else if ((iUpdateCount & 7) == 0 || apiDisplayResult.response.maximum_compatibility == true) {
     Log_info("%s [%d]: Forcing full refresh; desired refresh mode was: %d\r\n", __FILE__, __LINE__, iRefreshMode);
     iRefreshMode = REFRESH_FULL; // force full refresh every 8 partials
   }
   int refresh_seconds = refreshInterval.seconds();
   if (refresh_seconds >= 30 * 60 && iRefreshMode == REFRESH_PARTIAL) {
-        // For users who set updates 30 minutes or longer, use the "fast" update to prevent ghosting
+    // For users who set updates 30 minutes or longer, use the "fast" update to prevent ghosting
     Log_info("%s [%d]: Forcing fast refresh (not partial) since the TRMNL refresh_rate is set to > 30 min\n", __FILE__,
              __LINE__);
     iRefreshMode = REFRESH_FAST;
@@ -493,7 +550,7 @@ static bool refresh_epaper(int iRefreshMode, bool bWait, bool bAlloc) {
   display_set_light_sleep(true);
 #endif // DO_NOT_LIGHT_SLEEP
   if (bbep.getPanelType() == EP397_800x480 && iRefreshMode == REFRESH_FAST) {
-        // Seeed Sticky: fast refresh on this panel isn't working and full refresh = fast
+    // Seeed Sticky: fast refresh on this panel isn't working and full refresh = fast
     iRefreshMode = REFRESH_FULL;
   }
   if (!display_update_epaper(iRefreshMode, bWait, bAlloc)) {
@@ -551,7 +608,15 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait, bool b
 
   Log_info("display_show_image start");
   Log_info("maximum_compatibility = %d\n", apiDisplayResult.response.maximum_compatibility);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // Read the previous image before the new PNG decoder takes the heap, so the
+  // partial path can reuse that same block afterwards (see x4c_preload_previous_png).
+  x4c_preload_previous_png();
+#endif
   if (!draw_image(image_buffer, data_size, &iRefreshMode, &bAlloc)) {
+#ifdef BOARD_XTEINK_X4_CLASSIC
+    s_x4c_prev_png_size = 0;
+#endif
     return;
   }
   Log_info("Display refresh start");

@@ -58,6 +58,13 @@ size_t filesystem_read_and_allocate(const char *name, uint8_t **out_buffer);
 bool filesystem_read_from_file(const char *name, uint8_t *out_buffer, size_t size);
 
 /**
+ * @brief Size of a file without allocating a buffer for it
+ * @param name filename
+ * @return size in bytes, or -1 when the file does not exist/cannot be opened
+ */
+int filesystem_file_size(const char *name);
+
+/**
  * @brief Function to write data to file
  * @param name filename
  * @param in_buffer pointer to input buffer

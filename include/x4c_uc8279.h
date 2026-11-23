@@ -2,16 +2,16 @@
 
 #include <stdint.h>
 
-// X4C UC8279 full-refresh transport.
+// X4C UC8279 transport: full OTP flash plus the differential (DU) partial.
 //
 // bb_epaper's generic UC81xx path cannot drive the X4C glass: refresh() sends no
 // plane data, and its EP75_800x480 profile streams 480 rows from gate 0 while
 // the panel addresses 800x600 with the visible rows starting at gate 120.
 //
-// This transport implements the sequence validated on the unit (ported from
+// These transports implement the sequences validated on the unit (ported from
 // CrossPoint's Uc8279X4Driver): 600-row plane uploads (120 white + visible
-// rows), DTM1 seeded white, then CDI/CCSET/TSSET/PON/PSR/DRF/POF. It replaces
-// both writePlane() and refresh() for this panel.
+// rows), then either the GC/OTP full-refresh trigger or the PTIN/PTL windowed
+// DU partial. They replace both writePlane() and refresh() for this panel.
 //
 // Only the UC8279 profile is implemented. UC8179 units also need their own
 // PLL/booster/VCOM bring-up and stay on the previous path until validated.
@@ -20,6 +20,36 @@
 bool x4c_uc8279_active();
 
 // Blocking full update of `fb` (1 bpp, MSB first, bit 1 = white, stride
-// width/8). Returns false if the geometry is unsupported or a BUSY wait times
-// out.
+// width/8) with the OTP GC waveform. Returns false if the geometry is
+// unsupported or a BUSY wait times out.
 bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height);
+
+// Outcome of x4c_uc8279_partial_update().
+enum class X4cPartialResult : uint8_t {
+  Done,        // panel is up to date (a DU partial ran, or nothing had changed)
+  NotStarted,  // nothing was written; `fb` is intact and the caller may full-flash it
+  Failed,      // the panel was touched but the update did not complete
+};
+
+// Blocking differential update. `prev_png` is a cached PNG of the frame on the
+// glass; `fb` holds the new frame and is used as scratch: the new frame is
+// streamed to DTM2 first, then the PNG is decoded over `fb` while each row is
+// diffed against the bytes still there, so no second framebuffer is needed.
+// The changed bounding box is driven with the DU waveform (PTIN/PTL). On a
+// decode/hash mismatch or a failed partial it completes with the OTP GC flash
+// from the already-uploaded DTM2, which is still correct.
+X4cPartialResult x4c_uc8279_partial_update(uint8_t *fb, const uint8_t *prev_png, int prev_png_size, uint16_t width,
+                                           uint16_t height);
+
+// True when the last update through this transport succeeded, so the frame
+// identified by last_frame_hash() is what the glass shows.
+bool x4c_uc8279_baseline_valid();
+
+// FNV-1a of a 1-bpp framebuffer, in this transport's geometry.
+uint32_t x4c_uc8279_frame_hash(const uint8_t *fb, uint16_t width, uint16_t height);
+
+// Hash of the last frame successfully pushed through the transport.
+uint32_t x4c_uc8279_last_frame_hash();
+
+// Forget the baseline: the next update must be a full OTP flash.
+void x4c_uc8279_invalidate_baseline();

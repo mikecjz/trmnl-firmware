@@ -6,6 +6,8 @@
 #include <globals.h>
 #include <new>
 #include <png_render.h>
+#include <stdio.h>
+#include <string.h>
 #include <trmnl_log.h>
 
 #ifdef BOARD_XTEINK_X4_CLASSIC
@@ -423,7 +425,8 @@ int png_draw(PNGDRAW *pDraw) {
         if (g0 > g1) inv = 0xff;
       }
       const uint8_t *srcpx = pDraw->pPixels;
-      for (int i = 0; i < n; i++) fb[static_cast<size_t>(pDraw->y) * stride + i] = srcpx[i] ^ inv;
+      for (int i = 0; i < n; i++)
+        fb[static_cast<size_t>(pDraw->y) * stride + i] = srcpx[i] ^ inv;
     } else {
       // Any palette/grayscale/truecolor source -> 1 bpp, 1 = white, matching
       // the bb_epaper framebuffer convention.
@@ -704,8 +707,7 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
       return REFRESH_FULL;
 #endif // BOARD_TRMNL_4CLR
       bbep.setAddrWindow(0, 0, bbep.width(), bbep.height());
-      if (png->getBpp() == 1 ||
-          (png->getBpp() == 2 && png_count_colors(png, pPNG, iDataSize) == 2)
+      if (png->getBpp() == 1 || (png->getBpp() == 2 && png_count_colors(png, pPNG, iDataSize) == 2)
 #ifdef BOARD_XTEINK_X4_CLASSIC
           || x4c_uc8279_active() // mono panel: reduce any source to 1 bpp
 #endif
@@ -730,7 +732,7 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
           }
           bbep.fillScreen(BBEP_WHITE);
           s_x4c_buffer_draw = true;
-          iPlane = PNG_1_BIT;  // the X4C callback ignores the plane and emits 1 bpp
+          iPlane = PNG_1_BIT; // the X4C callback ignores the plane and emits 1 bpp
           png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
           png->decode(&iPlane, 0);
           s_x4c_buffer_draw = false;
@@ -813,3 +815,110 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
   delete (png); // free the decoder instance
   return rc;
 } /* png_to_epd() */
+
+#ifdef BOARD_XTEINK_X4_CLASSIC
+namespace {
+
+  constexpr uint32_t kFnvOffset = 2166136261u;
+
+  uint32_t fnv1aByte(uint32_t h, uint8_t b) {
+    h ^= b;
+    h *= 16777619u;
+    return h;
+  }
+
+  struct X4cPrevTarget {
+    uint8_t *fb;
+    int stride;
+    int height;
+    int next_y;
+    uint32_t hash;
+    int y0, y1, bx0, bx1;
+    bool bad;
+  };
+
+  // Compare one previous-frame byte with what the new frame left there, note the
+  // changed span, then overwrite it.
+  void diffAndReplace(X4cPrevTarget *t, int y, int i, uint8_t prev) {
+    uint8_t *p = t->fb + static_cast<size_t>(y) * t->stride + i;
+    if (*p != prev) {
+      if (t->bx0 < 0 || i < t->bx0) t->bx0 = i;
+      if (i > t->bx1) t->bx1 = i;
+      if (t->y0 < 0) t->y0 = y;
+      t->y1 = y;
+    }
+    *p = prev;
+    t->hash = fnv1aByte(t->hash, prev);
+  }
+
+  // Same 1-bpp reduction as the s_x4c_buffer_draw branch of png_draw(), but each
+  // reconstructed row is diffed against the new frame before replacing it.
+  int png_draw_prev_fb(PNGDRAW *pDraw) {
+    X4cPrevTarget *t = static_cast<X4cPrevTarget *>(pDraw->pUser);
+    if (t == nullptr || t->fb == nullptr) return 0;
+    if (pDraw->y >= t->height) return 0;
+    if (pDraw->y != t->next_y) { // row order is what keeps the hash well-defined
+      t->bad = true;
+      return 0;
+    }
+    int iWidth = pDraw->iWidth;
+    if (iWidth > t->stride * 8) iWidth = t->stride * 8;
+    const int n = (iWidth + 7) / 8;
+    uint8_t row[128];
+    if (pDraw->iBpp == 1) { // already 1 bpp: only the palette polarity needs fixing
+      uint8_t inv = 0;
+      if (pDraw->iPixelType == PNG_PIXEL_INDEXED) {
+        const uint32_t g0 = pDraw->pPalette[0] + (pDraw->pPalette[1] << 2) + pDraw->pPalette[2];
+        const uint32_t g1 = pDraw->pPalette[3] + (pDraw->pPalette[4] << 2) + pDraw->pPalette[5];
+        if (g0 > g1) inv = 0xff;
+      }
+      const uint8_t *s = pDraw->pPixels;
+      for (int i = 0; i < n; i++)
+        row[i] = s[i] ^ inv;
+    } else {
+      ReduceBpp(1, pDraw->iPixelType, pDraw->pPalette, pDraw->pPixels, row, iWidth, pDraw->iBpp);
+    }
+    for (int i = 0; i < n; i++)
+      diffAndReplace(t, pDraw->y, i, row[i]);
+    for (int i = n; i < t->stride; i++)
+      diffAndReplace(t, pDraw->y, i, 0xFF);
+    t->next_y = pDraw->y + 1;
+    return 1;
+  }
+
+} // namespace
+
+bool png_decode_prev_frame(const uint8_t *pPNG, int iDataSize, uint8_t *fb, int stride, int height, X4cPrevFrame *out) {
+  if (pPNG == nullptr || fb == nullptr || out == nullptr || stride <= 0 || height <= 0) return false;
+  X4cPrevTarget target{fb, stride, height, 0, kFnvOffset, -1, -1, -1, -1, false};
+  PNG *png = new (std::nothrow) PNG();
+  if (png == nullptr) return false;
+  int rc = png->openRAM((uint8_t *)pPNG, iDataSize, png_draw_prev_fb);
+  bool ok = false;
+  if (rc == PNG_SUCCESS) {
+    rc = png->decode(&target, 0);
+    ok = rc == PNG_SUCCESS && !target.bad;
+  }
+  png->close();
+  delete png;
+  if (!ok) return false;
+  // A shorter image leaves the rest of the previous frame white. Those rows
+  // still have to be diffed and hash-accumulated in order.
+  for (int y = target.next_y; y < height; y++) {
+    for (int i = 0; i < stride; i++)
+      diffAndReplace(&target, y, i, 0xFF);
+  }
+  out->decoded = true;
+  out->hash = target.hash;
+  out->any = target.y0 >= 0;
+  if (out->any) {
+    out->x = static_cast<uint16_t>(target.bx0 * 8);
+    out->w = static_cast<uint16_t>((target.bx1 - target.bx0 + 1) * 8);
+    out->y = static_cast<uint16_t>(target.y0);
+    out->h = static_cast<uint16_t>(target.y1 - target.y0 + 1);
+  } else {
+    out->x = out->y = out->w = out->h = 0;
+  }
+  return true;
+} /* png_decode_prev_frame() */
+#endif // BOARD_XTEINK_X4_CLASSIC

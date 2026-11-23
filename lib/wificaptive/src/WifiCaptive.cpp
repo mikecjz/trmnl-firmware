@@ -16,8 +16,16 @@
 void goToSleep(void);
 void saveShipmentStarted(void);
 void showMessageWithLogo(MSG message_type);
-// 30 minute timeout to prevent dead batteries while leaving room for setup
+// Timeout to prevent dead batteries while leaving room for setup. The X4
+// Classic's onboarding is longer, so it keeps the portal open for 30 minutes;
+// every other board keeps the 15-minute limit. AWAKE_TIME_LIMIT_MS in
+// sleep_session.cpp must stay above this, or the awake guard aborts the device
+// before the portal can time out and sleep.
+#ifdef BOARD_XTEINK_X4_CLASSIC
 #define PORTAL_TIMEOUT (30 * 60 * 1000)
+#else
+#define PORTAL_TIMEOUT (15 * 60 * 1000)
+#endif
 // After a successful join the AP is torn down; keep it (and the portal) up this
 // long when no custom API server is saved, so the Server field can still be set.
 #define POST_CONNECT_PORTAL_MS (5 * 60 * 1000)
@@ -201,8 +209,7 @@ bool WifiCaptive::startPortal() {
 
     // Post-connect grace window: the AP drops as soon as the loop breaks, so
     // stay up for a while when the server field has not been set yet.
-    if (succesfullyConnected && _postConnectDeadline != 0 &&
-        (int32_t)(millis() - _postConnectDeadline) >= 0) {
+    if (succesfullyConnected && _postConnectDeadline != 0 && (int32_t)(millis() - _postConnectDeadline) >= 0) {
       Log_info("Portal: post-connect setup window elapsed, finishing");
       break;
     }
