@@ -65,8 +65,8 @@
 // a physical press on the reporter's unit. Flip this one define (or the two
 // GPIO aliases) when the panel test is done; it must not block that test.
 #define X4C_SIDE_KEY_0_IS_UP 1
-#define X4C_SIDE_UP_GPIO    (X4C_SIDE_KEY_0_IS_UP ? 0 : 7)
-#define X4C_SIDE_DOWN_GPIO  (X4C_SIDE_KEY_0_IS_UP ? 7 : 0)
+#define X4C_SIDE_UP_GPIO     (X4C_SIDE_KEY_0_IS_UP ? 0 : 7)
+#define X4C_SIDE_DOWN_GPIO   (X4C_SIDE_KEY_0_IS_UP ? 7 : 0)
 // The other five buttons are discrete active-low GPIOs as well (no ADC ladder):
 // Power 3, bottom-left 5, bottom-right 2, confirm 8, back 9.
 #define X4C_KEY_POWER_GPIO   3

@@ -45,8 +45,7 @@ void button_log_wake_source(void) {
   // drawn and then covered by the dashboard.
   const uint32_t prev_draws = x4c_draw_count;
   x4c_draw_count = 0;
-  esp_log_write(ESP_LOG_WARN, "X4C",
-                "wake: reason=%d mask=0x%03llx prev_reason=%d prev_mask=0x%03llx prev_draws=%lu\n",
+  esp_log_write(ESP_LOG_WARN, "X4C", "wake: reason=%d mask=0x%03llx prev_reason=%d prev_mask=0x%03llx prev_draws=%lu\n",
                 (int)wakeup_reason, (unsigned long long)mask, x4c_last_wake_reason,
                 (unsigned long long)x4c_last_wake_mask, (unsigned long)prev_draws);
   if (mask != 0) {

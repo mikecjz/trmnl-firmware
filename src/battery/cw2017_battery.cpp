@@ -20,38 +20,38 @@
 
 namespace {
 
-constexpr uint8_t kGaugeAddress = 0x63;
-constexpr uint8_t kRegVersion = 0x00;
-constexpr uint8_t kRegVcell = 0x02; // two bytes, MSB first
-constexpr uint32_t kI2cHz = 400000;
+  constexpr uint8_t kGaugeAddress = 0x63;
+  constexpr uint8_t kRegVersion = 0x00;
+  constexpr uint8_t kRegVcell = 0x02; // two bytes, MSB first
+  constexpr uint32_t kI2cHz = 400000;
 
-bool cw2017VersionIsRunning(uint8_t version) { return (version & 0xFD) == 0x0D; }
+  bool cw2017VersionIsRunning(uint8_t version) { return (version & 0xFD) == 0x0D; }
 
 // raw is a 14-bit ADC value; 5/16 scaling gives millivolts (Papyrix/Datasheet).
-uint16_t cw2017Millivolts(uint16_t raw) {
-  const uint16_t raw14 = static_cast<uint16_t>(raw & 0x3FFF);
-  return static_cast<uint16_t>((raw14 * 5U + 8U) >> 4U);
-}
+  uint16_t cw2017Millivolts(uint16_t raw) {
+    const uint16_t raw14 = static_cast<uint16_t>(raw & 0x3FFF);
+    return static_cast<uint16_t>((raw14 * 5U + 8U) >> 4U);
+  }
 
-bool readReg8(uint8_t reg, uint8_t *value) {
-  Wire.beginTransmission(kGaugeAddress);
-  Wire.write(reg);
-  if (Wire.endTransmission() != 0) return false;
-  if (Wire.requestFrom(static_cast<int>(kGaugeAddress), 1) != 1) return false;
-  *value = Wire.read();
-  return true;
-}
+  bool readReg8(uint8_t reg, uint8_t *value) {
+    Wire.beginTransmission(kGaugeAddress);
+    Wire.write(reg);
+    if (Wire.endTransmission() != 0) return false;
+    if (Wire.requestFrom(static_cast<int>(kGaugeAddress), 1) != 1) return false;
+    *value = Wire.read();
+    return true;
+  }
 
-bool readReg16Be(uint8_t reg, uint16_t *value) {
-  Wire.beginTransmission(kGaugeAddress);
-  Wire.write(reg);
-  if (Wire.endTransmission() != 0) return false;
-  if (Wire.requestFrom(static_cast<int>(kGaugeAddress), 2) != 2) return false;
-  const uint8_t high = Wire.read();
-  const uint8_t low = Wire.read();
-  *value = static_cast<uint16_t>((high << 8) | low);
-  return true;
-}
+  bool readReg16Be(uint8_t reg, uint16_t *value) {
+    Wire.beginTransmission(kGaugeAddress);
+    Wire.write(reg);
+    if (Wire.endTransmission() != 0) return false;
+    if (Wire.requestFrom(static_cast<int>(kGaugeAddress), 2) != 2) return false;
+    const uint8_t high = Wire.read();
+    const uint8_t low = Wire.read();
+    *value = static_cast<uint16_t>((high << 8) | low);
+    return true;
+  }
 
 } // namespace
 
@@ -90,6 +90,5 @@ float Cw2017Battery::readVoltage(TRMNL_DEVICE *pDevice) {
   }
   return _voltage;
 }
-
 
 #endif // BOARD_XTEINK_X4_CLASSIC
