@@ -81,16 +81,23 @@ private:
 /// @brief Reads the CW2017 fuel gauge (I2C 0x63) on the Xteink X4 Classic.
 ///        The Classic keeps its factory calibration, so this driver never
 ///        rewrites the 80-byte BATINFO profile; it only validates the gauge and
-///        reads VCELL. If the gauge does not answer, the last good reading is
-///        reused; if there has never been one, a nominal 3.9 V is reported so
-///        the device still boots and pairs, with an explicit warning in the log.
+///        reads VCELL and SOC. If the gauge does not answer, the last good
+///        reading is reused; if there has never been one, a nominal 3.9 V is
+///        reported so the device still boots and pairs, with an explicit
+///        warning in the log.
 class Cw2017Battery : public BaseBattery {
 public:
   float readVoltage(TRMNL_DEVICE *pDevice) override;
   float readVoltage() override { return _voltage; }
 
+  /// @brief State of charge from the last readVoltage() call.
+  /// @return percent (0-100), or -1 when the gauge did not answer or reported
+  ///         a value outside that range
+  int readSoc() const { return _soc; } // %
+
 private:
   float _voltage = 3.9f;   // nominal fallback until the gauge answers
+  int _soc = -1;
   bool _haveReading = false;
 };
 #endif

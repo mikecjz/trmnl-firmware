@@ -98,5 +98,11 @@ ApiDisplayInputs createApiHeaders() {
   inputs.gaugeCapacityFull = battery().readGaugeCapacityFull();
 #endif // BOARD_TRMNL_X
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // The CW2017 SOC was read with VCELL before the display and WiFi turned on;
+  // -1 means the gauge had no valid reading and Percent-Charged is omitted.
+  inputs.stateOfCharge = battery().readSoc();
+#endif // BOARD_XTEINK_X4_CLASSIC
+
   return inputs;
 }

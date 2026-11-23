@@ -65,6 +65,11 @@ struct ApiDisplayInputs {
   int gaugeCapacityRemain;
   int gaugeCapacityFull;
 #endif
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // CW2017 gauge state of charge; -1 when the gauge did not answer or reported
+  // a value outside 0-100, in which case Percent-Charged is omitted.
+  int stateOfCharge = -1;
+#endif
   String firmwareVersion;
   String firmwareCommit;
   String model;
