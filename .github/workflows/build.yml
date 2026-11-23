@@ -52,7 +52,7 @@ jobs:
           gcc --version
 
       - name: test
-        run: pio test -e native -v
+        run: pio test -e native -e native-x4c -v
 
       # Saved on main only, as in integration.yml.
       - uses: actions/cache/save@v6

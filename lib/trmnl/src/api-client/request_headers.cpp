@@ -16,6 +16,13 @@ HttpHeaderList buildDisplayHeaders(const ApiDisplayInputs &inputs) {
   if (inputs.usbStatus != UsbStatus::UNKNOWN)
     headers.push_back({"USB-Connected", inputs.usbStatus == UsbStatus::CONNECTED ? "true" : "false"});
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // The CW2017 gauge answers with a percentage; when it has no valid reading the
+  // header is omitted and the server falls back to Battery-Voltage's curve.
+  if (inputs.stateOfCharge >= 0 && inputs.stateOfCharge <= 100)
+    headers.push_back({"Percent-Charged", String(inputs.stateOfCharge)});
+#endif // BOARD_XTEINK_X4_CLASSIC
+
 #ifdef BOARD_TRMNL_X
   headers.push_back({"Battery-Count", String(inputs.batteryCount)});
   headers.push_back({"Percent-Charged", String(inputs.stateOfCharge)});

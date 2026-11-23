@@ -6,11 +6,13 @@
 // Register map and the "keep the factory calibration" behaviour follow the
 // MIT-licensed Papyrix Cw2017Backend.cpp. On the Classic Papyrix deliberately
 // passes a null BATINFO profile: the gauge is never rewritten, only validated
-// (VERSION must report running) and read (VCELL). That is what this driver does.
+// (VERSION must report running) and read (VCELL and SOC). That is what this
+// driver does.
 //
 // Failure policy: reuse the last good reading; if the gauge has never answered,
 // keep the nominal 3.9 V initial value so the device still boots, pairs and can
-// be diagnosed. A warning is logged once per boot.
+// be diagnosed. A warning is logged once per boot. A SOC outside 0-100 is
+// treated as no reading (-1), so the server can fall back to the voltage curve.
 
 #include <Arduino.h>
 #include <ArduinoLog.h>
@@ -23,6 +25,7 @@ namespace {
   constexpr uint8_t kGaugeAddress = 0x63;
   constexpr uint8_t kRegVersion = 0x00;
   constexpr uint8_t kRegVcell = 0x02; // two bytes, MSB first
+  constexpr uint8_t kRegSoc = 0x04;   // state of charge, percent (Papyrix kSoc)
   constexpr uint32_t kI2cHz = 400000;
 
   bool cw2017VersionIsRunning(uint8_t version) { return (version & 0xFD) == 0x0D; }
@@ -72,15 +75,22 @@ float Cw2017Battery::readVoltage(TRMNL_DEVICE *pDevice) {
   for (int attempt = 0; attempt < 2; ++attempt) {
     uint8_t version = 0;
     uint16_t raw = 0;
-    if (readReg8(kRegVersion, &version) && cw2017VersionIsRunning(version) && readReg16Be(kRegVcell, &raw)) {
-      const uint16_t millivolts = cw2017Millivolts(raw);
-      if (millivolts >= 2500 && millivolts <= 4500) {
-        _voltage = static_cast<float>(millivolts) / 1000.0f;
-        _haveReading = true;
-        Log.info("CW2017: %.2f V (VCELL=0x%04X)", _voltage, raw);
-        return _voltage;
+    uint8_t soc = 0;
+    if (readReg8(kRegVersion, &version) && cw2017VersionIsRunning(version)) {
+      // SOC does not gate the voltage reading: a failed or implausible SOC just
+      // leaves it unset so the header is omitted. 0% is a real reading.
+      if (readReg8(kRegSoc, &soc)) _soc = (soc <= 100) ? static_cast<int>(soc) : -1;
+
+      if (readReg16Be(kRegVcell, &raw)) {
+        const uint16_t millivolts = cw2017Millivolts(raw);
+        if (millivolts >= 2500 && millivolts <= 4500) {
+          _voltage = static_cast<float>(millivolts) / 1000.0f;
+          _haveReading = true;
+          Log.info("CW2017: %.2f V, SOC=%d%% (VCELL=0x%04X)", _voltage, _soc, raw);
+          return _voltage;
+        }
+        Log.warning("CW2017: implausible VCELL=0x%04X (%u mV)", raw, millivolts);
       }
-      Log.warning("CW2017: implausible VCELL=0x%04X (%u mV)", raw, millivolts);
     }
     delay(20);
   }

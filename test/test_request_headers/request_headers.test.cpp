@@ -39,6 +39,9 @@ static ApiDisplayInputs makeDisplayInputs() {
   inputs.imageCached = false;
   inputs.prevWakeTime = 42;
   inputs.resetReason = "ESP_RST_PANIC";
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  inputs.stateOfCharge = -1; // gauge had no reading unless a test sets one
+#endif
   return inputs;
 }
 
@@ -211,6 +214,43 @@ void test_display_headers_wifi_band_omitted_when_empty(void) {
   TEST_ASSERT_FALSE(has(headers, "WiFi-Band"));
 }
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+// --- buildDisplayHeaders: X4 Classic CW2017 SOC ----------------------------
+
+void test_display_headers_percent_charged_from_gauge(void) {
+  auto inputs = makeDisplayInputs();
+  inputs.stateOfCharge = 73;
+  auto headers = buildDisplayHeaders(inputs);
+  TEST_ASSERT_EQUAL_STRING("73", valueOf(headers, "Percent-Charged").c_str());
+  // The voltage stays alongside it; the server decides which to prefer.
+  TEST_ASSERT_TRUE(has(headers, "Battery-Voltage"));
+}
+
+void test_display_headers_percent_charged_zero_is_valid(void) {
+  auto inputs = makeDisplayInputs();
+  inputs.stateOfCharge = 0;
+  auto headers = buildDisplayHeaders(inputs);
+  TEST_ASSERT_EQUAL_STRING("0", valueOf(headers, "Percent-Charged").c_str());
+}
+
+// No valid gauge reading: the header is absent so the server falls back to
+// the voltage curve.
+void test_display_headers_percent_charged_omitted_when_unavailable(void) {
+  auto inputs = makeDisplayInputs();
+  inputs.stateOfCharge = -1;
+  auto headers = buildDisplayHeaders(inputs);
+  TEST_ASSERT_FALSE(has(headers, "Percent-Charged"));
+  TEST_ASSERT_TRUE(has(headers, "Battery-Voltage"));
+}
+
+void test_display_headers_percent_charged_omitted_when_out_of_range(void) {
+  auto inputs = makeDisplayInputs();
+  inputs.stateOfCharge = 101;
+  auto headers = buildDisplayHeaders(inputs);
+  TEST_ASSERT_FALSE(has(headers, "Percent-Charged"));
+}
+#endif // BOARD_XTEINK_X4_CLASSIC
+
 // --- buildImageHeaders -----------------------------------------------------
 
 // The image request carries only auth headers (ID + Access-Token), shared by
@@ -279,6 +319,12 @@ void process() {
   RUN_TEST(test_display_headers_wifi_band_2_4);
   RUN_TEST(test_display_headers_wifi_band_5);
   RUN_TEST(test_display_headers_wifi_band_omitted_when_empty);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  RUN_TEST(test_display_headers_percent_charged_from_gauge);
+  RUN_TEST(test_display_headers_percent_charged_zero_is_valid);
+  RUN_TEST(test_display_headers_percent_charged_omitted_when_unavailable);
+  RUN_TEST(test_display_headers_percent_charged_omitted_when_out_of_range);
+#endif
   RUN_TEST(test_image_headers_names_order_and_values);
   RUN_TEST(test_format_headers_newline_separated_no_trailing_newline);
   RUN_TEST(test_format_headers_empty_list_is_empty_string);
