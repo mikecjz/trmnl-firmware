@@ -1,5 +1,21 @@
 # Xteink X4 Classic — recovery and rollback
 
+> [!WARNING]
+> **`merged_firmware.bin` at `0x0` is stock→TRMNL *conversion only*.**
+> That image is the one-shot conversion from stock Xteink firmware to the TRMNL
+> layout. It carries the bootloader, the partition table and the app, and
+> `esptool merge_bin` fills every gap between them with `0xFF` — so writing it
+> at `0x0` also **erases NVS at `0xe000`** (Wi-Fi credentials, API key, saved
+> `api_url`) and **`otadata`**.
+>
+> On a unit that already runs the TRMNL layout — the normal case for every
+> update after the first one — the only correct write is **app-only**:
+> `firmware.bin` at **`0x20000`** (see §3). Reflashing the merged image over a
+> provisioned unit drops it back into its `TRMNL-xxxxxx` setup portal and loses
+> its saved server URL and key. The server-side registration is keyed by MAC and
+> is not affected, so the unit re-registers once it is pointed at the right
+> server again.
+
 This procedure is required before the first write and again whenever a build
 needs to be undone. It works entirely through the ESP32-S3 ROM USB bootloader,
 which is mask ROM: a bad application image cannot remove it.
@@ -64,6 +80,10 @@ NVS, including Wi-Fi calibration).
 ## 3. Flash the TRMNL merged image
 
 Only after the backup exists and its hash has been recorded:
+
+**Conversion only — this write destroys NVS and otadata (warning at the top of
+this document).** Use it once, while the unit still runs stock Xteink firmware.
+For any later update of a converted unit, skip to the app-only command below.
 
 ```sh
 esptool.py --chip esp32s3 --port "$PORT" write_flash \
