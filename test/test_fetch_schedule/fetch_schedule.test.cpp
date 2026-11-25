@@ -121,7 +121,11 @@ void test_backoff_sleep_restarts_the_grid() {
 
 void test_zero_interval_does_not_spin() {
   FetchSchedule schedule = {};
-  TEST_ASSERT_EQUAL_UINT64(0, fetchScheduleSleepUs(schedule, 42 * S, 0));
+  // No interval to schedule against, but a zero timer would wake immediately and
+  // spin: fall back to the same floor every other cycle uses.
+  TEST_ASSERT_EQUAL_UINT64(FETCH_SCHEDULE_MIN_SLEEP_US, fetchScheduleSleepUs(schedule, 42 * S, 0));
+  TEST_ASSERT_TRUE(schedule.anchored);
+  TEST_ASSERT_EQUAL_UINT64(42 * S + FETCH_SCHEDULE_MIN_SLEEP_US, schedule.due_us);
 }
 
 void test_a_cycle_longer_than_the_interval_sleeps_only_the_floor() {
