@@ -75,7 +75,7 @@ void bl_init(void) {
   // this wake's fetch the manual one rather than dropping the press.
   if (x4c_refresh_keys_take_press() && !force_full_refresh) {
     force_full_refresh = true;
-    Log_info("Refresh key pressed while awake: this fetch is a manual hard refresh");
+    esp_log_write(ESP_LOG_WARN, "X4C", "refresh key pressed while awake: this fetch is the manual refresh\n");
   }
 #endif
 
@@ -86,7 +86,7 @@ void bl_init(void) {
   // run the manual refresh now. Bounded so a stream of presses cannot hold the
   // device awake; a press after the last round is caught again at sleep entry.
   for (int round = 0; round < X4C_MAX_MANUAL_REFRESH_ROUNDS && x4c_refresh_keys_take_press(); round++) {
-    Log_info("Refresh key pressed during the fetch: manual hard refresh now");
+    esp_log_write(ESP_LOG_WARN, "X4C", "refresh key pressed during the fetch: manual refresh now\n");
     force_full_refresh = true;
     showScreen(true);
   }

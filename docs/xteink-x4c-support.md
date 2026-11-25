@@ -144,7 +144,12 @@ How the manual refresh works:
      refresh while Wi-Fi is still up (at most 2 extra per wake);
    - pressed as the unit goes to sleep: `arm_x4c_wake_keys()` records it in RTC
      memory and arms a 100 ms timer, so the next wake does the manual refresh.
-   Each caught press is logged as `X4C: refresh key pressed while awake`.
+   Each caught press is logged from the main task as `X4C: refresh key pressed
+   while awake: …` / `… during the fetch: …`. The sampling task itself never
+   logs: `esp_log_write()` needs more stack than a 2 KB task has (newlib's
+   vfprintf alone is an 800-byte frame), and an early build that logged from the
+   task panic-reset on every awake press, which showed as a cold boot (wake logo,
+   then the dashboard) instead of a quiet redraw.
 
 The server names each PNG `screen-<sha256>-<changed>`, so the fetch after a
 button press is a real `/api/display` round-trip: a changed screen returns a new
