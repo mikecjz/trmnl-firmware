@@ -120,14 +120,35 @@ static void arm_x4c_wake_keys(uint64_t armed_sleep_us) {
   // A refresh key pressed since the wake last checked (or going down right now,
   // which also keeps it out of the mask above) would be lost to this sleep.
   // Remember it and wake again almost at once to do the manual refresh.
-  X4cKeyPress press = {0, 0};
-  const bool deferred = x4c_refresh_keys_take_press_before_sleep(&press);
+  X4cKeyPress press = {0, 0, false};
+  bool deferred = x4c_refresh_keys_take_press_before_sleep(&press);
+  X4cKeyPress owed = {0, 0, false};
+  uint8_t owed_attempt = 0;
+  const bool still_owed = x4c_refresh_keys_take_owed(&owed, &owed_attempt);
   if (deferred) {
-    x4c_refresh_keys_defer_to_next_wake(press);
-    esp_sleep_enable_timer_wakeup(X4C_DEFERRED_PRESS_SLEEP_US);
-    armed_sleep_us = X4C_DEFERRED_PRESS_SLEEP_US;
+    // The next wake's fetch serves both a new press and one still owed. Keep the
+    // older press time (latency is measured from the first unserved tap) and
+    // both keys, so neither key's release counts again on the re-wake. A fresh
+    // tap gets a fresh attempt.
+    X4cKeyPress next = still_owed ? owed : press;
+    next.key_mask |= press.key_mask;
+    x4c_refresh_keys_defer_to_next_wake(next, 0);
     x4c_tap_trace_press(TapSource::SleepSnapshot, TapPhase::SleepEntry, press.rtc_ms, press.key_mask);
     esp_log_write(ESP_LOG_WARN, "X4C", "sleep: refresh key pressed while going to sleep, waking right back\n");
+  } else if (still_owed && owed_attempt == 0 && armed_sleep_us != 0) {
+    // (Not in the button-only sleep, which deliberately arms no timer.)
+    // This wake took a press but its manual fetch did not succeed (Wi-Fi or
+    // server error, or the wake ended in an error path): try once more right
+    // away rather than swallowing the tap. A second failure is dropped, so a
+    // dead server cannot turn into a 100 ms wake loop.
+    x4c_refresh_keys_defer_to_next_wake(owed, 1);
+    deferred = true;
+    x4c_tap_trace_press(TapSource::Retry, TapPhase::SleepEntry, owed.rtc_ms, owed.key_mask);
+    esp_log_write(ESP_LOG_WARN, "X4C", "sleep: manual refresh did not complete, retrying on a 100 ms re-wake\n");
+  }
+  if (deferred) {
+    esp_sleep_enable_timer_wakeup(X4C_DEFERRED_PRESS_SLEEP_US);
+    armed_sleep_us = X4C_DEFERRED_PRESS_SLEEP_US;
   }
   x4c_tap_trace_sleep((uint32_t)(armed_sleep_us / 1000ULL), deferred);
 }

@@ -4,9 +4,17 @@ void keyPressLatchInit(KeyPressLatch &latch, bool level_low) {
   latch.pressed = level_low;
   latch.run = 0;
   latch.latched = false;
+  latch.grace = 0;
+}
+
+void keyPressLatchInitWithGrace(KeyPressLatch &latch, bool level_low, uint16_t grace_samples) {
+  keyPressLatchInit(latch, level_low);
+  latch.grace = level_low ? grace_samples : 0;
 }
 
 bool keyPressLatchSample(KeyPressLatch &latch, bool level_low) {
+  const bool in_grace = latch.grace > 0;
+  if (in_grace) latch.grace--;
   if (level_low == latch.pressed) {
     latch.run = 0;
     return false;
@@ -15,7 +23,14 @@ bool keyPressLatchSample(KeyPressLatch &latch, bool level_low) {
 
   latch.run = 0;
   latch.pressed = level_low;
-  if (!level_low) return false; // a release
+  latch.grace = 0; // only the first release can count
+  if (!level_low) {
+    if (!in_grace) return false; // an ordinary release
+    // A key that was already down when sampling started and came up quickly:
+    // a tap that landed before sampling began.
+    latch.latched = true;
+    return true;
+  }
   latch.latched = true;
   return true;
 }

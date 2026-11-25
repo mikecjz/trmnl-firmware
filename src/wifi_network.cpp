@@ -17,6 +17,7 @@
 #ifdef BOARD_XTEINK_X4_CLASSIC
 #include <globals.h>
 #include <wifi-helpers.h>
+#include <x4c_tap_trace.h>
 #endif
 
 namespace {
@@ -36,6 +37,21 @@ namespace {
   RTC_DATA_ATTR char x4c_last_ap_pswd[65] = {0};
   RTC_DATA_ATTR uint8_t x4c_last_ap_bssid[6] = {0};
   RTC_DATA_ATTR uint8_t x4c_last_ap_channel = 0;
+  // The DHCP lease that join got (IPv4, network byte order as IPAddress keeps
+  // it). Reusing it as a static config on the directed rejoin skips the DHCP
+  // round trip (~1.5 s measured), the same idea as upstream's leased-DHCP fast
+  // connect. Every scheduled wake does a full DHCP join and refreshes it, so at
+  // a 10 s interval it is seconds old. 0 = none / forgotten.
+  RTC_DATA_ATTR uint32_t x4c_lease_ip = 0;
+  RTC_DATA_ATTR uint32_t x4c_lease_gw = 0;
+  RTC_DATA_ATTR uint32_t x4c_lease_mask = 0;
+  RTC_DATA_ATTR uint32_t x4c_lease_dns = 0;
+  // This wake joined on the remembered lease (RAM).
+  bool x4c_lease_in_use = false;
+
+  void forgetLease() {
+    x4c_lease_ip = x4c_lease_gw = x4c_lease_mask = x4c_lease_dns = 0;
+  }
 
   void rememberLastAp(const WifiCredentials &creds) {
     if (creds.ssid.length() == 0 || creds.is5GHz || creds.isEnterprise) return;
@@ -49,6 +65,14 @@ namespace {
     x4c_last_ap_pswd[sizeof(x4c_last_ap_pswd) - 1] = '\0';
     memcpy(x4c_last_ap_bssid, bssid, sizeof(x4c_last_ap_bssid));
     x4c_last_ap_channel = (uint8_t)channel;
+
+    // Only a DHCP-assigned address is reused (static-IP setups never take the
+    // directed path anyway).
+    x4c_lease_ip = (uint32_t)WiFi.localIP();
+    x4c_lease_gw = (uint32_t)WiFi.gatewayIP();
+    x4c_lease_mask = (uint32_t)WiFi.subnetMask();
+    x4c_lease_dns = (uint32_t)WiFi.dnsIP(0);
+    if (x4c_lease_ip == 0 || x4c_lease_gw == 0 || x4c_lease_mask == 0) forgetLease();
   }
 
   bool connectToRememberedAp(const WifiCredentials &creds) {
@@ -66,6 +90,12 @@ namespace {
     WiFi.setMinSecurity(WIFI_AUTH_OPEN);
     WiFi.setAutoReconnect(false);
     applyWifiHostname(WifiCaptivePortal.getHostname());
+    bool lease = false;
+    if (x4c_lease_ip != 0) {
+      const IPAddress dns = x4c_lease_dns != 0 ? IPAddress(x4c_lease_dns) : IPAddress(x4c_lease_gw);
+      lease = WiFi.config(IPAddress(x4c_lease_ip), IPAddress(x4c_lease_gw), IPAddress(x4c_lease_mask), dns);
+      if (lease) Log_info("WiFi: reusing lease %s", IPAddress(x4c_lease_ip).toString().c_str());
+    }
     WiFi.begin(creds.ssid.c_str(), creds.pswd.c_str(), x4c_last_ap_channel, x4c_last_ap_bssid);
 
     while (WiFi.status() != WL_CONNECTED && millis() - started < X4C_FAST_REJOIN_TIMEOUT_MS) {
@@ -73,11 +103,19 @@ namespace {
     }
     if (WiFi.status() == WL_CONNECTED) {
       Log_info("WiFi: rejoined remembered AP in %lu ms", (unsigned long)(millis() - started));
+      x4c_lease_in_use = lease;
+      x4c_tap_trace_wifi_path(true, lease);
       return true;
     }
 
     Log_info("WiFi: remembered AP did not answer in %lu ms; falling back to a scan",
              (unsigned long)(millis() - started));
+    if (lease) {
+      // Back to DHCP for the scan-and-join fallback (0.0.0.0 re-enables the
+      // DHCP client), and do not trust this lease again.
+      WiFi.config((uint32_t)0, (uint32_t)0, (uint32_t)0);
+      forgetLease();
+    }
     WiFi.disconnect();
     return false;
   }
@@ -158,6 +196,18 @@ bool connectWithSavedCredentials(void) {
   return connected;
 }
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+void x4cWifiManualFetchFailed(void) {
+  // The address may be stale (association works but nothing routes): the retry
+  // and every later directed rejoin do a normal DHCP bind until a full join
+  // remembers a fresh lease.
+  if (x4c_lease_in_use) {
+    Log_info("WiFi: manual fetch failed on a reused lease; forgetting it");
+    forgetLease();
+  }
+}
+#endif
+
 bool ensureWifiConnected(void) {
   if (WiFi.status() == WL_CONNECTED) return true;
 
@@ -177,13 +227,21 @@ bool ensureWifiConnected(void) {
     return false;
   }
 
-  const unsigned long reconnect_wait_ms = min((uint32_t)WIFI_RECONNECT_TIMEOUT_MS, budget_ms);
-  WiFi.reconnect();
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < reconnect_wait_ms)
-    delay(100);
+  // WiFi.reconnect() only works while the station is running. After
+  // WiFi.disconnect(true) (the radio switched off to save power) it cannot
+  // succeed, and waiting out the timeout only added 10 s to the next fetch:
+  // go straight to the join.
+  if (WiFi.getMode() & WIFI_MODE_STA) {
+    const unsigned long reconnect_wait_ms = min((uint32_t)WIFI_RECONNECT_TIMEOUT_MS, budget_ms);
+    WiFi.reconnect();
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < reconnect_wait_ms)
+      delay(100);
 
-  if (WiFi.status() == WL_CONNECTED) return true;
+    if (WiFi.status() == WL_CONNECTED) return true;
+  } else {
+    Log_info("%s [%d]: WiFi radio is off; joining directly\r\n", __FILE__, __LINE__);
+  }
 
   return connectWithSavedCredentials();
 }

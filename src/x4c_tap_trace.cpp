@@ -88,7 +88,9 @@ void x4c_tap_trace_press(TapSource source, TapPhase phase, uint32_t rtc_ms, uint
   if (phase == TapPhase::SleepEntry) return; // served by the next wake, which records it as deferred-wake
   if (phase == TapPhase::Wake && source == TapSource::DeferredWake) s_flags |= TAP_CYCLE_DEFERRED_IN;
   if (!s_pending.active) {
-    s_pending = {true, source, rtc_ms, 0, phase == TapPhase::AfterFetch};
+    // A press taken after the download, before its draw, is served by that
+    // draw: its "fetch" is the one that just finished, with no wait.
+    s_pending = {true, source, rtc_ms, phase == TapPhase::BeforeDraw ? rtc_ms : 0, phase == TapPhase::AfterFetch};
   }
 }
 
@@ -116,6 +118,11 @@ void x4c_tap_trace_draw_done(bool flashed) {
 }
 
 void x4c_tap_trace_result(int request_result) { s_last_result = request_result; }
+
+void x4c_tap_trace_wifi_path(bool fast_rejoin, bool lease) {
+  if (fast_rejoin) s_flags |= TAP_CYCLE_FAST_REJOIN;
+  if (lease) s_flags |= TAP_CYCLE_LEASE;
+}
 
 void x4c_tap_trace_sleep(uint32_t armed_sleep_ms, bool deferred_out) {
   close_pending(0); // a press this wake never flashed for

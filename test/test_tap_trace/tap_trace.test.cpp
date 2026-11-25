@@ -57,6 +57,17 @@ void test_cycle_line_marks_phases_not_reached() {
   TEST_ASSERT_NOT_NULL(strstr(line, " deferred-in"));
 }
 
+void test_new_sources_phases_and_wifi_flags() {
+  char line[256];
+  tapTraceFormat(line, sizeof(line), 1, tapPressRecord(10, TapSource::BootGrace, TapPhase::BeforeDraw, 0x4, 0));
+  TEST_ASSERT_NOT_NULL(strstr(line, "src=boot-grace phase=before-draw"));
+  tapTraceFormat(line, sizeof(line), 2, tapManualRecord(10, TapSource::Retry, 3, 0, 4000, false));
+  TEST_ASSERT_NOT_NULL(strstr(line, "src=retry"));
+  tapTraceFormat(line, sizeof(line), 3,
+                 tapCycleRecord(0, 3, 0x20, TAP_CYCLE_FAST_REJOIN | TAP_CYCLE_LEASE, 1, 2, 3, 4, 5, 6, 7, 0, 0));
+  TEST_ASSERT_NOT_NULL(strstr(line, " fast-rejoin lease"));
+}
+
 void test_press_and_manual_lines() {
   char line[256];
   tapTraceFormat(line, sizeof(line), 3, tapPressRecord(1000, TapSource::SleepSnapshot, TapPhase::SleepEntry, 0x200, 9100));
@@ -82,5 +93,6 @@ int main(int argc, char **argv) {
   RUN_TEST(test_cycle_line_shows_every_phase);
   RUN_TEST(test_cycle_line_marks_phases_not_reached);
   RUN_TEST(test_press_and_manual_lines);
+  RUN_TEST(test_new_sources_phases_and_wifi_flags);
   return UNITY_END();
 }

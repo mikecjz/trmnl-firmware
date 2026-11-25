@@ -41,6 +41,10 @@ enum class TapSource : uint8_t {
   KeyWake = 3,
   /// The 100 ms re-wake after a SleepSnapshot press.
   DeferredWake = 4,
+  /// A press whose manual fetch failed, retried by a 100 ms re-wake.
+  Retry = 5,
+  /// A key tapped in the boot window, before sampling started (seen on release).
+  BootGrace = 6,
 };
 
 /// Where in the wake the press was taken.
@@ -53,6 +57,8 @@ enum class TapPhase : uint8_t {
   SleepEntry = 2,
   /// The press that woke the chip.
   Wake = 3,
+  /// After the download, before the image is drawn: that draw becomes the flash.
+  BeforeDraw = 4,
 };
 
 /// Cycle flags (TapRecord::a for Cycle records).
@@ -61,6 +67,8 @@ enum : uint8_t {
   TAP_CYCLE_DEFERRED_OUT = 1 << 1, // this wake deferred a press to the next one
   TAP_CYCLE_MANUAL = 1 << 2,       // this wake ran at least one manual refresh
   TAP_CYCLE_FLASHED = 1 << 3,      // this wake did a full flash
+  TAP_CYCLE_FAST_REJOIN = 1 << 4,  // Wi-Fi rejoined the remembered AP without a scan
+  TAP_CYCLE_LEASE = 1 << 5,        // ... and reused the remembered DHCP lease
 };
 
 /// "Not reached in this wake" for the ms-since-wake phase fields.

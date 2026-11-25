@@ -21,4 +21,10 @@ bool connectWithSavedCredentials(void);
 /// @brief Ensure WiFi is connected, reconnecting with saved credentials if needed.
 bool ensureWifiConnected(void);
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+/// @brief A manual (refresh-key) fetch failed: stop reusing the remembered DHCP
+///        lease in case it went stale.
+void x4cWifiManualFetchFailed(void);
+#endif
+
 #endif // WIFI_NETWORK_H

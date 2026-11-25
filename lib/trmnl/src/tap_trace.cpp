@@ -15,6 +15,10 @@ namespace {
       return "key-wake";
     case TapSource::DeferredWake:
       return "deferred-wake";
+    case TapSource::Retry:
+      return "retry";
+    case TapSource::BootGrace:
+      return "boot-grace";
     default:
       return "unknown";
     }
@@ -30,6 +34,8 @@ namespace {
       return "sleep-entry";
     case TapPhase::Wake:
       return "wake";
+    case TapPhase::BeforeDraw:
+      return "before-draw";
     default:
       return "?";
     }
@@ -146,13 +152,14 @@ int tapTraceFormat(char *out, size_t size, uint32_t seq, const TapRecord &r) {
     phaseStr(draw, sizeof(draw), tapPhaseLo(r.v[1]));
     return snprintf(out, size,
                     "tap #%lu cycle wake@%lums reason=%u ext1=0x%03x wifi=%s fetch=%s dl=%s draw=%s sleep=+%u "
-                    "armed=%lums epoch=%lu low_samples=%u task_presses=%u%s%s%s%s",
+                    "armed=%lums epoch=%lu low_samples=%u task_presses=%u%s%s%s%s%s%s",
                     (unsigned long)seq, (unsigned long)r.t_ms, (unsigned)(r.b & 0xFF), (unsigned)(r.v[2] & 0xFFFF),
                     wifi, fetch, dl, draw, (unsigned)(r.v[2] >> 16), (unsigned long)(r.v[3] & 0x00FFFFFF),
                     (unsigned long)r.v[4], (unsigned)(r.v[3] >> 24), (unsigned)(r.b >> 8),
                     (r.a & TAP_CYCLE_DEFERRED_IN) ? " deferred-in" : "",
                     (r.a & TAP_CYCLE_DEFERRED_OUT) ? " deferred-out" : "", (r.a & TAP_CYCLE_MANUAL) ? " manual" : "",
-                    (r.a & TAP_CYCLE_FLASHED) ? " flashed" : "");
+                    (r.a & TAP_CYCLE_FLASHED) ? " flashed" : "", (r.a & TAP_CYCLE_FAST_REJOIN) ? " fast-rejoin" : "",
+                    (r.a & TAP_CYCLE_LEASE) ? " lease" : "");
   }
   case TapRecordKind::Press:
     return snprintf(out, size, "tap #%lu press @%lums src=%s phase=%s keys=0x%03lx wake+%lums", (unsigned long)seq,
