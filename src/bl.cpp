@@ -13,9 +13,17 @@
 #include <trmnl_log.h>
 #include <wake_init.h>
 #include <wifi_session.h>
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_refresh_keys.h>
+#endif
 
 #ifdef BOARD_TRMNL_X
 #include <touchbar_actions.h>
+#endif
+
+#ifdef BOARD_XTEINK_X4_CLASSIC
+// Manual refreshes one wake will run for presses made while it was awake.
+#define X4C_MAX_MANUAL_REFRESH_ROUNDS 2
 #endif
 
 // Fetches the screen from /api/display, shows it (or the error), then handles what the response asks for
@@ -62,8 +70,27 @@ void bl_init(void) {
   submitStoredLogs();
   log_retry = true;
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // A refresh key pressed while this wake was booting or joining Wi-Fi: make
+  // this wake's fetch the manual one rather than dropping the press.
+  if (x4c_refresh_keys_take_press() && !force_full_refresh) {
+    force_full_refresh = true;
+    Log_info("Refresh key pressed while awake: this fetch is a manual hard refresh");
+  }
+#endif
+
   // OTA checking, image checking and drawing
   showScreen(wake.showErrorsNow);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // A refresh key pressed during the fetch or the draw: Wi-Fi is still up, so
+  // run the manual refresh now. Bounded so a stream of presses cannot hold the
+  // device awake; a press after the last round is caught again at sleep entry.
+  for (int round = 0; round < X4C_MAX_MANUAL_REFRESH_ROUNDS && x4c_refresh_keys_take_press(); round++) {
+    Log_info("Refresh key pressed during the fetch: manual hard refresh now");
+    force_full_refresh = true;
+    showScreen(true);
+  }
+#endif
 #ifdef BOARD_TRMNL_X
   touchbar_stay_awake([] { showScreen(true); });
 #endif

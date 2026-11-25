@@ -132,6 +132,19 @@ How the manual refresh works:
    dirty-rect diff and the DU partial, and restarts the partial/ghosting counter
    (`iUpdateCount = 0`). This is the one button path that is deliberately a
    flash: bottom left / right / confirm / back (GPIO 5 / 2 / 8 / 9).
+7. Presses while the unit is **awake** are caught too. ext1 only sees a key while
+   the chip sleeps, and at a short refresh interval most of a cycle is awake time
+   (boot, Wi-Fi, fetch, draw; the fetch grid takes that time out of the sleep),
+   so without this most presses landed in an awake window and were dropped.
+   `src/x4c_refresh_keys.cpp` samples the four bottom keys every 10 ms from boot
+   (debounced by `lib/trmnl` `key_press_latch`; a key already down at boot, i.e.
+   the wake press or a stuck key, does not count until released):
+   - pressed before the fetch starts: that fetch becomes the manual refresh;
+   - pressed during the fetch or draw: `bl.cpp` runs one more fetch with a hard
+     refresh while Wi-Fi is still up (at most 2 extra per wake);
+   - pressed as the unit goes to sleep: `arm_x4c_wake_keys()` records it in RTC
+     memory and arms a 100 ms timer, so the next wake does the manual refresh.
+   Each caught press is logged as `X4C: refresh key pressed while awake`.
 
 The server names each PNG `screen-<sha256>-<changed>`, so the fetch after a
 button press is a real `/api/display` round-trip: a changed screen returns a new

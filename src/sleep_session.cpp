@@ -17,6 +17,7 @@
 #include <status_screens.h>
 #include <trmnl_log.h>
 #include <x4c_full_refresh.h>
+#include <x4c_refresh_keys.h>
 
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
@@ -78,6 +79,10 @@ static uint64_t timerSleepUs([[maybe_unused]] bool keep_timer, SleepKind kind) {
  * @return none
  */
 #ifdef BOARD_XTEINK_X4_CLASSIC
+// A press caught on the way into sleep wakes the device after this instead of
+// the scheduled interval.
+#define X4C_DEFERRED_PRESS_SLEEP_US (100 * 1000ULL)
+
 // Arms the X4 Classic wake keys for deep sleep. Keys that read low are left out
 // of the ext1 mask: a key that is held down (stuck, or pressed by a stand) stays
 // low after the chip sleeps, so ext1 would wake it again immediately and turn
@@ -107,9 +112,18 @@ static void arm_x4c_wake_keys(void) {
 
   if (wake_mask == 0) {
     esp_log_write(ESP_LOG_WARN, "X4C", "sleep: every wake key is held low, timer wake only\n");
-    return;
+  } else {
+    esp_sleep_enable_ext1_wakeup_io(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
   }
-  esp_sleep_enable_ext1_wakeup_io(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+
+  // A refresh key pressed since the wake last checked (or going down right now,
+  // which also keeps it out of the mask above) would be lost to this sleep.
+  // Remember it and wake again almost at once to do the manual refresh.
+  if (x4c_refresh_keys_take_press_before_sleep()) {
+    x4c_refresh_keys_defer_to_next_wake();
+    esp_sleep_enable_timer_wakeup(X4C_DEFERRED_PRESS_SLEEP_US);
+    esp_log_write(ESP_LOG_WARN, "X4C", "sleep: refresh key pressed while going to sleep, waking right back\n");
+  }
 }
 #endif // BOARD_XTEINK_X4_CLASSIC
 
