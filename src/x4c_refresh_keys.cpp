@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <config.h>
+#include <driver/gpio.h>
 #include <esp_attr.h>
 #include <esp_log.h>
 #include <key_press_latch.h>
@@ -13,6 +14,12 @@ namespace {
   constexpr size_t kKeyCount = sizeof(kKeys) / sizeof(kKeys[0]);
   // 10 ms samples with a 2-sample debounce: a tap of ~20 ms or more is caught.
   constexpr TickType_t kSamplePeriod = pdMS_TO_TICKS(10);
+  // The task only samples GPIO levels and updates the latches: it must never
+  // log. esp_log_write() goes through esp_insights and newlib's vfprintf
+  // (800-byte frame, re-entered through __sbprintf for an unbuffered console),
+  // which overflowed the original 2 KB stack on the first press and
+  // panic-reset the chip. The margin here is for interrupt frames.
+  constexpr uint32_t kTaskStackBytes = 3072;
 
   KeyPressLatch s_latches[kKeyCount];
   portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -22,18 +29,16 @@ namespace {
   // wake it happened in.
   RTC_DATA_ATTR bool s_deferred = false;
 
-  bool key_low(uint8_t pin) { return digitalRead(pin) == LOW; }
+  bool key_low(uint8_t pin) { return gpio_get_level(static_cast<gpio_num_t>(pin)) == 0; }
 
   void watch_task(void *) {
     for (;;) {
-      bool new_press = false;
       for (size_t i = 0; i < kKeyCount; i++) {
         const bool low = key_low(kKeys[i]);
         taskENTER_CRITICAL(&s_lock);
-        new_press |= keyPressLatchSample(s_latches[i], low);
+        keyPressLatchSample(s_latches[i], low);
         taskEXIT_CRITICAL(&s_lock);
       }
-      if (new_press) esp_log_write(ESP_LOG_WARN, "X4C", "refresh key pressed while awake\n");
       vTaskDelay(kSamplePeriod);
     }
   }
@@ -45,7 +50,7 @@ void x4c_refresh_keys_watch_start(void) {
     pinMode(kKeys[i], INPUT_PULLUP);
     keyPressLatchInit(s_latches[i], key_low(kKeys[i]));
   }
-  if (xTaskCreate(watch_task, "x4c_keys", 2048, nullptr, 1, &s_task) != pdPASS) {
+  if (xTaskCreate(watch_task, "x4c_keys", kTaskStackBytes, nullptr, 1, &s_task) != pdPASS) {
     s_task = nullptr;
     esp_log_write(ESP_LOG_WARN, "X4C", "refresh key watcher not started\n");
   }
