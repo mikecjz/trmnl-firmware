@@ -12,6 +12,8 @@
  *                                since the previous fetch and its drift
  * Consecutive `start at rtc ...` values are directly diffable, so the actual
  * fetch-to-fetch period can be read without trusting the configured value.
+ * They go to the ESP log console, so they do not depend on the server-side
+ * verbose-logging setting.
  */
 
 /// Call once per boot from bl_init(), after preferences are open.
