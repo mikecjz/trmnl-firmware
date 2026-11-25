@@ -15,6 +15,7 @@
 #include <filesystem.h>
 #include <globals.h>
 #include <logging_parcers.h>
+#include <net_budget_runtime.h>
 #include <png.h>
 #include <power.h>
 #include <refresh_interval.h>
@@ -484,6 +485,7 @@ static ApiDisplayInputs loadApiDisplayInputs(Preferences &preferences, float bat
 }
 
 https_request_err_e downloadAndShow(float batteryVoltage) {
+  netBudgetBegin();          // this cycle's whole network allowance starts here
   fetchTimingOnFetchStart(); // logs the measured fetch-to-fetch period
   image_err_e png_res = PNG_DECODE_ERR;
   bmp_err_e bmp_res = BMP_NOT_BMP;

@@ -5,12 +5,16 @@
 #include <http_client.h>
 #include <http_utils.h>
 #include <inttypes.h>
+#include <net_budget.h>
+#include <net_budget_runtime.h>
 #include <services/http_retry_request.h>
 #include <stdlib.h>
 #include <string.h>
 #include <trmnl_log.h>
 #include <utility>
 #include <wifi_network.h>
+
+#include "esp_log.h"
 
 #ifdef BOARD_TRMNL_X
 #include <WifiCaptive.h>
@@ -61,9 +65,28 @@ HttpRetryRequest::~HttpRetryRequest() { releaseBody(); }
 
 // ---- public ---------------------------------------------------------------
 
+https_request_err_e HttpRetryRequest::abandonForBudget(uint8_t attempt, https_request_err_e last_err) {
+  netBudgetMarkFetchAborted();
+  // A caller reads HTTPS_NO_ERR as success: report a timeout if nothing failed yet.
+  if (last_err == HTTPS_NO_ERR) last_err = HTTPS_TIMED_OUT;
+  _errorDetail = "network budget exhausted before attempt " + String(attempt);
+  esp_log_write(ESP_LOG_WARN, "net-budget",
+                "net budget: exhausted after %llu ms (limit %u ms); abandoning fetch at attempt %u/%u (%s)\n",
+                (unsigned long long)netBudgetElapsedMs(), (unsigned)NET_BUDGET_LIMIT_MS, (unsigned)attempt,
+                (unsigned)HTTP_FAST_RETRY_ATTEMPTS, https_request_err_str(last_err));
+  return last_err;
+}
+
 https_request_err_e HttpRetryRequest::execute() {
   https_request_err_e err = HTTPS_NO_ERR;
   for (uint8_t attempt = 1; attempt <= HTTP_FAST_RETRY_ATTEMPTS; ++attempt) {
+    // The budget is shared by every request in this wake (API fetch, image
+    // fetch, their reconnect) and every retry; once it is spent, abandon the
+    // fetch instead of asking the network for more time.
+    if (netBudgetExpired()) {
+      return abandonForBudget(attempt, err);
+    }
+
     err = attemptOnce();
 
     if (err == HTTPS_NO_ERR) {
@@ -80,8 +103,16 @@ https_request_err_e HttpRetryRequest::execute() {
     Log_error_serial("Connection attempt %d/%d failed: %s", attempt, HTTP_FAST_RETRY_ATTEMPTS, _errorDetail.c_str());
 
     if (attempt < HTTP_FAST_RETRY_ATTEMPTS) {
+      // Do not spend the last of the budget on a backoff the next attempt could
+      // not use, and never sleep past the deadline.
+      if (netBudgetRemainingMs() <= HTTP_FAST_RETRY_DELAY_MS + NET_BUDGET_MIN_ATTEMPT_MS) {
+        return abandonForBudget(attempt + 1, err);
+      }
       delay(HTTP_FAST_RETRY_DELAY_MS);
     }
+  }
+  if (netBudgetExpired()) {
+    return abandonForBudget(HTTP_FAST_RETRY_ATTEMPTS, err);
   }
   Log_error("HTTP GET failed after %d attempts: %s - %s, RSSI %" PRId32, HTTP_FAST_RETRY_ATTEMPTS,
             https_request_err_str(err), _errorDetail.c_str(), signalRssi());
@@ -170,8 +201,17 @@ https_request_err_e HttpRetryRequest::finishBody() {
 // ---- Wi-Fi transport ------------------------------------------------------
 
 void HttpRetryRequest::applyRequestSettings(HTTPClient &https, const String &hopUrl) {
-  https.setTimeout(_readTimeoutMs);
-  https.setConnectTimeout(HTTP_DEFAULT_TIMEOUT_MS);
+  // One attempt cannot outlive the wake's network budget, even when the
+  // server's image_url_timeout (or the default) is longer than what is left.
+  uint32_t read_timeout_ms = netBudgetClampTimeoutMs(_readTimeoutMs);
+  if (read_timeout_ms > HTTP_MAX_TIMEOUT_MS) read_timeout_ms = HTTP_MAX_TIMEOUT_MS;
+  uint32_t connect_timeout_ms = netBudgetClampTimeoutMs(HTTP_DEFAULT_TIMEOUT_MS);
+  // A zero timeout means "no timeout" to HTTPClient; a spent budget must not
+  // turn into a wait that never ends.
+  if (read_timeout_ms == 0) read_timeout_ms = 1;
+  if (connect_timeout_ms == 0) connect_timeout_ms = 1;
+  https.setTimeout((uint16_t)read_timeout_ms);
+  https.setConnectTimeout((int32_t)connect_timeout_ms);
   https.addHeader("Accept-Encoding", "identity"); // plain bytes for both JSON and image bodies
   if (isSameOrigin(hopUrl, _config.apiBaseUrl)) {
     applyHeaders(https, _config.headers);
@@ -182,7 +222,18 @@ void HttpRetryRequest::applyRequestSettings(HTTPClient &https, const String &hop
 }
 
 https_request_err_e HttpRetryRequest::attemptWiFi() {
-  ensureWifiConnected(); // a long panel refresh in light sleep can drop the connection
+  // A long panel refresh in light sleep can drop the connection. Reconnecting
+  // is allowed once per wake: the ladder (last network, scan, up to 5 saved
+  // networks at 3 x 15 s) can take minutes, and re-entering it before every
+  // attempt is what could hold the device awake for most of its window.
+  if (WiFi.status() != WL_CONNECTED) {
+    if (!netBudgetTakeReconnect()) {
+      _errorDetail = "Wi-Fi disconnected and the wake's single reconnect is already spent";
+      Log_error_serial("%s", _errorDetail.c_str());
+      return HTTPS_UNABLE_TO_CONNECT;
+    }
+    ensureWifiConnected();
+  }
   return withHttp(
     _config.url,
     [this](HTTPClient *https, HttpError error) -> https_request_err_e {
@@ -251,8 +302,13 @@ https_request_err_e HttpRetryRequest::readWiFiBody(HTTPClient &https, int conten
   WiFiClient *stream = https.getStreamPtr();
   uint32_t received = 0;
   bool closedEarly = false;
+  bool budgetExhausted = false;
   unsigned long lastActivity = millis();
   while (received < expected && millis() < lastActivity + IMAGE_STREAM_INACTIVITY_TIMEOUT_MS) {
+    if (netBudgetExpired()) {
+      budgetExhausted = true;
+      break;
+    }
     int available = stream->available();
     if (available > 0) {
       size_t want = expected - received;
@@ -273,8 +329,13 @@ https_request_err_e HttpRetryRequest::readWiFiBody(HTTPClient &https, int conten
   stream->stop(); // Important! If you don't do this, WiFi will have a memory exception later
 
   if (received < expected) {
-    _errorDetail = String("incomplete download (") + (closedEarly ? "connection closed early" : "timed out") +
-                   "): " + String(received) + "/" + String(expected) + " bytes";
+    const char *why = "timed out";
+    if (budgetExhausted)
+      why = "network budget exhausted";
+    else if (closedEarly)
+      why = "connection closed early";
+    _errorDetail = String("incomplete download (") + why + "): " + String(received) + "/" + String(expected) +
+                   " bytes";
     Log_error_serial("Receiving failed; %s, RSSI %d", _errorDetail.c_str(), WiFi.RSSI());
     releaseBody();
     return HTTPS_TIMED_OUT;
@@ -352,6 +413,9 @@ https_request_err_e HttpRetryRequest::attemptModem() {
   bool tooBig = false;
   bool outOfMemory = false;
   unsigned long timeoutMs = _readTimeoutMs > HTTP_MODEM_TIMEOUT_MS ? _readTimeoutMs : HTTP_MODEM_TIMEOUT_MS;
+  // The modem call blocks too: keep it inside the wake's network budget.
+  const uint32_t budget_timeout_ms = netBudgetClampTimeoutMs((uint32_t)timeoutMs);
+  timeoutMs = budget_timeout_ms > 0 ? budget_timeout_ms : 1;
 
   auto res = g_modem->httpGet(
     _config.url,

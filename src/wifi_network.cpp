@@ -3,6 +3,8 @@
 #include <WiFi.h>
 #include <WifiCaptive.h>
 #include <config.h>
+#include <net_budget.h>
+#include <net_budget_runtime.h>
 #include <trmnl_log.h>
 #include <wifi_network.h>
 
@@ -83,9 +85,19 @@ bool ensureWifiConnected(void) {
     return false;
   }
 
+  // The reconnect ladder (a fresh join, a scan, then every saved network) is
+  // the expensive part of a wake, so it is only worth entering while the
+  // wake's network budget can pay for it.
+  const uint32_t budget_ms = netBudgetRemainingMs();
+  if (budget_ms < NET_BUDGET_MIN_RECONNECT_MS) {
+    Log_info("%s [%d]: network budget spent, not reconnecting\r\n", __FILE__, __LINE__);
+    return false;
+  }
+
+  const unsigned long reconnect_wait_ms = min((uint32_t)WIFI_RECONNECT_TIMEOUT_MS, budget_ms);
   WiFi.reconnect();
   unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_RECONNECT_TIMEOUT_MS)
+  while (WiFi.status() != WL_CONNECTED && millis() - start < reconnect_wait_ms)
     delay(100);
 
   if (WiFi.status() == WL_CONNECTED) return true;
