@@ -15,6 +15,7 @@
 #include <sleep_session.h>
 #include <status_screens.h>
 #include <trmnl_log.h>
+#include <x4c_full_refresh.h>
 
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
@@ -139,6 +140,13 @@ static void enterSleep(bool keep_timer) {
   iPrevWakeTime = millis() - startup_time; // save for statistics
   Log.info("%s [%d]: total awake time - %d ms\r\n", __FILE__, __LINE__, iPrevWakeTime);
   Log.info("%s [%d]: time to sleep - %d\r\n", __FILE__, __LINE__, time_to_sleep);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // Count the interval actually armed as elapsed towards the next full flash.
+  // This is what keeps the schedule working before the first SNTP sync, when
+  // the epoch still reads 0. A button wake that cuts the sleep short leaves
+  // this a little over: the next flash is early, never late.
+  x4c_full_refresh_note_sleep(time_to_sleep);
+#endif
   if (!keep_timer) preferences.putUInt(PREFERENCES_LAST_SLEEP_TIME, systemClock().getTime());
   preferences.end();
   esp_sleep_enable_timer_wakeup(sleep_us);

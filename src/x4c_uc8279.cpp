@@ -67,6 +67,11 @@ namespace {
 // (this build has PSRAM disabled, so a second framebuffer is not an option).
   RTC_DATA_ATTR uint32_t s_last_frame_hash = 0;
   RTC_DATA_ATTR bool s_baseline_valid = false;
+// Counts completed OTP flashes (full_update, and the DU-failure / untrusted-
+// previous-frame fallback). display.cpp diffs it around one panel write to know
+// whether the glass actually flashed, which the returned mode cannot say: a
+// "partial" that fell back is still a flash.
+  RTC_DATA_ATTR uint32_t s_flash_count = 0;
 
   void out(const char *fmt, ...) {
     char line[192];
@@ -220,6 +225,7 @@ namespace {
     SPI.endTransaction();
     if (ok) {
       noteFrameHash(new_hash);
+      s_flash_count++;
     } else {
       x4c_uc8279_invalidate_baseline();
     }
@@ -238,6 +244,8 @@ uint32_t x4c_uc8279_frame_hash(const uint8_t *fb, uint16_t width, uint16_t heigh
 bool x4c_uc8279_baseline_valid() { return s_baseline_valid; }
 
 uint32_t x4c_uc8279_last_frame_hash() { return s_last_frame_hash; }
+
+uint32_t x4c_uc8279_flash_count() { return s_flash_count; }
 
 void x4c_uc8279_invalidate_baseline() { s_baseline_valid = false; }
 
@@ -325,6 +333,7 @@ bool x4c_uc8279_full_update(const uint8_t *fb, uint16_t width, uint16_t height) 
 
   if (ok) {
     noteFrameHash(new_hash);
+    s_flash_count++;
   } else {
     x4c_uc8279_invalidate_baseline();
   }

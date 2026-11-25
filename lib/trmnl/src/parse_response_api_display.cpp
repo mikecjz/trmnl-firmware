@@ -22,6 +22,7 @@ ApiDisplayResponse parseResponse_apiDisplay(String &payload) {
         .maximum_compatibility = false,
         .firmware_url = "",
         .refresh_rate = 0,
+        .full_refresh_interval = 0,
         .temp_profile = 0,
         .reset_firmware = false,
         .special_function = SF_NONE,
@@ -51,6 +52,9 @@ ApiDisplayResponse parseResponse_apiDisplay(String &payload) {
       .maximum_compatibility = doc["maximum_compatibility"] | false,
       .firmware_url = doc["firmware_url"] | "",
       .refresh_rate = doc["refresh_rate"],
+      // Optional: absent (an older server) parses as 0, which the refresh
+      // schedule reads as "use the firmware default".
+      .full_refresh_interval = doc["full_refresh_interval"] | 0u,
       .temp_profile = u32TP,
       .reset_firmware = doc["reset_firmware"],
       .special_function = parseSpecialFunction(special_function_str),

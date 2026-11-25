@@ -19,6 +19,7 @@
 #ifdef BOARD_XTEINK_X4_CLASSIC
 #include <esp_sleep.h>
 #include <filesystem.h>
+#include <x4c_full_refresh.h>
 #include <x4c_uc8279.h>
 
 #include "displayed_image.h"
@@ -126,6 +127,7 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
   // The X4C UC8279 needs a gate-offset-aware upload plus an explicit old plane
   // and the reference trigger sequence; bb_epaper's generic path cannot do it.
   if (x4c_uc8279_active()) {
+    const uint32_t flashes_before = x4c_uc8279_flash_count();
     uint8_t *fb = static_cast<uint8_t *>(bbep.getBuffer());
     if (fb == nullptr) {
       Log_error("display_update_epaper: no framebuffer");
@@ -154,7 +156,19 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
       // controller cannot diff, so take the flash rather than risk corruption.
       ok = x4c_uc8279_full_update(fb, w, h);
     }
-    if (ok) x4c_draw_count++;
+    if (ok) {
+      x4c_draw_count++;
+      // The transport's own counter says whether the glass actually flashed:
+      // a write requested as a partial falls back to the OTP flash when the
+      // previous frame cannot be trusted (boot, wake logo, lost cache) or the
+      // DU did not complete. Re-basing on that keeps the interval honest, and
+      // it is the only place all of those funnel through.
+      if (x4c_uc8279_flash_count() != flashes_before) {
+        x4c_full_refresh_note_flash();
+      } else {
+        x4c_full_refresh_note_partial();
+      }
+    }
     bCanDoPartial = ok && x4c_uc8279_baseline_valid();
     return ok;
   }
@@ -180,6 +194,15 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
     Log_info("Have valid previous image in EPD memory, doing partial refresh");
   }
   bbep.refresh(refreshMode, wait);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // Non-UC8279 X4C panels go through bb_epaper's generic path, which reports
+  // the mode it ran rather than a flash counter.
+  if (refreshMode == REFRESH_FULL) {
+    x4c_full_refresh_note_flash();
+  } else {
+    x4c_full_refresh_note_partial();
+  }
+#endif
     // The next update can be a partial update because the current is 1-bpp and stays in the EPD RAM
   bCanDoPartial = (bbep.getPanelType() == dpList[active_panel_set_index()][iTempProfile].OneBit);
   return true;
@@ -338,9 +361,12 @@ void display_wipe(void) {
     display_set_panel_type(dpList[active_panel_set_index()][iTempProfile].OneBit);
     bbep.fillScreen(BBEP_WHITE);
     const uint8_t *fb = static_cast<const uint8_t *>(bbep.getBuffer());
+    bool flashed = false;
     for (int i = 0; i < 2; i++) {
-      x4c_uc8279_full_update(fb, display_width(), display_height());
+      flashed |= x4c_uc8279_full_update(fb, display_width(), display_height());
     }
+    // A deliberate ghost-clearing flash counts as the last full refresh.
+    if (flashed) x4c_full_refresh_note_flash();
     return;
   }
 #endif
@@ -510,6 +536,27 @@ static void save_temp_profile_from_api(void) {
 }
 
 #ifdef BB_EPAPER
+// True when this paint must be a full (flashing) refresh, server settings aside.
+static bool full_refresh_required(void) {
+  if (apiDisplayResult.response.maximum_compatibility == true) {
+    Log_info("%s [%d]: Full refresh: server asked for maximum compatibility\r\n", __FILE__, __LINE__);
+    return true;
+  }
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // Elapsed time since the last full flash, not a paint count: the server's
+  // full_refresh_interval (default 3600 s) sets the cadence, and it is re-read
+  // every paint, so a changed value applies to the very next one.
+  if (x4c_full_refresh_due(apiDisplayResult.response.full_refresh_interval)) {
+    Log_info("%s [%d]: Full refresh due: age %u s, interval %u s\r\n", __FILE__, __LINE__,
+             (unsigned)x4c_full_refresh_age_seconds(), (unsigned)apiDisplayResult.response.full_refresh_interval);
+    return true;
+  }
+  return false;
+#else
+  return (iUpdateCount & 7) == 0; // force full refresh every 8 partials
+#endif
+}
+
 // Adjusts the image's refresh mode for the refresh count, the server's settings and the panel
 static int choose_refresh_mode(int iRefreshMode, bool *pWait) {
   bool bWait = *pWait;
@@ -521,9 +568,9 @@ static int choose_refresh_mode(int iRefreshMode, bool *pWait) {
     Log_info("%s [%d]: Manual refresh: forcing full refresh\r\n", __FILE__, __LINE__);
     iRefreshMode = REFRESH_FULL;
     iUpdateCount = 0;
-  } else if ((iUpdateCount & 7) == 0 || apiDisplayResult.response.maximum_compatibility == true) {
+  } else if (full_refresh_required()) {
     Log_info("%s [%d]: Forcing full refresh; desired refresh mode was: %d\r\n", __FILE__, __LINE__, iRefreshMode);
-    iRefreshMode = REFRESH_FULL; // force full refresh every 8 partials
+    iRefreshMode = REFRESH_FULL;
   }
   int refresh_seconds = refreshInterval.seconds();
   if (refresh_seconds >= 30 * 60 && iRefreshMode == REFRESH_PARTIAL) {

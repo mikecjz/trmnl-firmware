@@ -51,5 +51,11 @@ uint32_t x4c_uc8279_frame_hash(const uint8_t *fb, uint16_t width, uint16_t heigh
 // Hash of the last frame successfully pushed through the transport.
 uint32_t x4c_uc8279_last_frame_hash();
 
+// Number of completed OTP full flashes since power-on, surviving deep sleep.
+// Diffs around one panel write tell the caller whether that write flashed even
+// when it was requested as a partial (the DU failed, or the previous frame
+// could not be trusted and the transport fell back).
+uint32_t x4c_uc8279_flash_count();
+
 // Forget the baseline: the next update must be a full OTP flash.
 void x4c_uc8279_invalidate_baseline();

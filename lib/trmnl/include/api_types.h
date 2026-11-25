@@ -34,6 +34,10 @@ struct ApiDisplayResponse {
   bool maximum_compatibility;
   String firmware_url;
   uint64_t refresh_rate;
+  // Seconds between full (flashing) refreshes. Optional key: absent or 0 means
+  // "use the firmware default" (3600 s), so an older server still behaves
+  // sensibly.
+  uint32_t full_refresh_interval;
   uint32_t temp_profile;
   bool reset_firmware;
   SPECIAL_FUNCTION special_function;
