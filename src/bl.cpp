@@ -15,6 +15,7 @@
 #include <wifi_session.h>
 #ifdef BOARD_XTEINK_X4_CLASSIC
 #include <x4c_refresh_keys.h>
+#include <x4c_tap_trace.h>
 #endif
 
 #ifdef BOARD_TRMNL_X
@@ -30,6 +31,9 @@
 static void showScreen(bool should_show_error_now) {
   https_request_err_e request_result = downloadAndShow(battery_voltage);
   esp_log_write(ESP_LOG_WARN, "X4C", "showScreen: request result %d\n", (int)request_result);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  x4c_tap_trace_result((int)request_result);
+#endif
   Log.info("%s [%d]: request result - %s\r\n", __FILE__, __LINE__, https_request_err_str(request_result));
   showImageTooBigIfNeeded(request_result);
   applyRetryPolicy(request_result, should_show_error_now); // may sleep
@@ -65,6 +69,9 @@ void bl_init(void) {
   logVersions();
 
   wifiSessionConnect(wake.showErrorsNow);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  x4c_tap_trace_wifi_up();
+#endif
   updateTimeSinceSleep();
   ensureDeviceSetUp(); // may sleep
   submitStoredLogs();
@@ -73,7 +80,14 @@ void bl_init(void) {
 #ifdef BOARD_XTEINK_X4_CLASSIC
   // A refresh key pressed while this wake was booting or joining Wi-Fi: make
   // this wake's fetch the manual one rather than dropping the press.
-  if (x4c_refresh_keys_take_press() && !force_full_refresh) {
+  X4cKeyPress press = {0, 0};
+  const bool pressed_before_fetch = x4c_refresh_keys_take_press(&press);
+  if (pressed_before_fetch) {
+    // Recorded even when this wake is already a manual refresh (key wake): the
+    // press is then merged into it.
+    x4c_tap_trace_press(TapSource::Task, TapPhase::BeforeFetch, press.rtc_ms, press.key_mask);
+  }
+  if (pressed_before_fetch && !force_full_refresh) {
     force_full_refresh = true;
     esp_log_write(ESP_LOG_WARN, "X4C", "refresh key pressed while awake: this fetch is the manual refresh\n");
   }
@@ -85,7 +99,8 @@ void bl_init(void) {
   // A refresh key pressed during the fetch or the draw: Wi-Fi is still up, so
   // run the manual refresh now. Bounded so a stream of presses cannot hold the
   // device awake; a press after the last round is caught again at sleep entry.
-  for (int round = 0; round < X4C_MAX_MANUAL_REFRESH_ROUNDS && x4c_refresh_keys_take_press(); round++) {
+  for (int round = 0; round < X4C_MAX_MANUAL_REFRESH_ROUNDS && x4c_refresh_keys_take_press(&press); round++) {
+    x4c_tap_trace_press(TapSource::Task, TapPhase::AfterFetch, press.rtc_ms, press.key_mask);
     esp_log_write(ESP_LOG_WARN, "X4C", "refresh key pressed during the fetch: manual refresh now\n");
     force_full_refresh = true;
     showScreen(true);

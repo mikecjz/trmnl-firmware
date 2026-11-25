@@ -4,6 +4,9 @@
 #include <globals.h>
 #include <refresh_interval.h>
 #include <trmnl_log.h>
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_tap_trace.h>
+#endif
 
 #include "esp_log.h"
 #include "esp_rtc_time.h"
@@ -41,6 +44,9 @@ void fetchTimingOnWake(void) {
 }
 
 void fetchTimingOnFetchStart(void) {
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  x4c_tap_trace_fetch_start();
+#endif
   const uint64_t now = esp_rtc_get_time_us();
   const uint64_t configured_ms = intervalUs() / 1000;
   fetchCount++;

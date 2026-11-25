@@ -18,6 +18,7 @@
 #include <trmnl_log.h>
 #include <x4c_full_refresh.h>
 #include <x4c_refresh_keys.h>
+#include <x4c_tap_trace.h>
 
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
@@ -88,7 +89,7 @@ static uint64_t timerSleepUs([[maybe_unused]] bool keep_timer, SleepKind kind) {
 // low after the chip sleeps, so ext1 would wake it again immediately and turn
 // every sleep into a logo/dashboard boot loop. Each pin is logged so a capture
 // taken through the sleep shows the levels that were armed.
-static void arm_x4c_wake_keys(void) {
+static void arm_x4c_wake_keys(uint64_t armed_sleep_us) {
   static const uint8_t keys[] = {
       X4C_KEY_POWER_GPIO, X4C_KEY_LEFT_GPIO, X4C_KEY_RIGHT_GPIO, X4C_KEY_CONFIRM_GPIO, X4C_KEY_BACK_GPIO};
   for (uint8_t pin : keys) {
@@ -119,11 +120,16 @@ static void arm_x4c_wake_keys(void) {
   // A refresh key pressed since the wake last checked (or going down right now,
   // which also keeps it out of the mask above) would be lost to this sleep.
   // Remember it and wake again almost at once to do the manual refresh.
-  if (x4c_refresh_keys_take_press_before_sleep()) {
-    x4c_refresh_keys_defer_to_next_wake();
+  X4cKeyPress press = {0, 0};
+  const bool deferred = x4c_refresh_keys_take_press_before_sleep(&press);
+  if (deferred) {
+    x4c_refresh_keys_defer_to_next_wake(press);
     esp_sleep_enable_timer_wakeup(X4C_DEFERRED_PRESS_SLEEP_US);
+    armed_sleep_us = X4C_DEFERRED_PRESS_SLEEP_US;
+    x4c_tap_trace_press(TapSource::SleepSnapshot, TapPhase::SleepEntry, press.rtc_ms, press.key_mask);
     esp_log_write(ESP_LOG_WARN, "X4C", "sleep: refresh key pressed while going to sleep, waking right back\n");
   }
+  x4c_tap_trace_sleep((uint32_t)(armed_sleep_us / 1000ULL), deferred);
 }
 #endif // BOARD_XTEINK_X4_CLASSIC
 
@@ -186,7 +192,7 @@ static void enterSleep(bool keep_timer, SleepKind kind = SleepKind::Backoff) {
 #ifdef BOARD_TRMNL_X
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
 #elif defined(BOARD_XTEINK_X4_CLASSIC)
-  arm_x4c_wake_keys();
+  arm_x4c_wake_keys(sleep_us);
 #else
   esp_sleep_enable_ext0_wakeup((gpio_num_t)pDevice->interrupt_pin, 0);
 #endif
@@ -272,7 +278,7 @@ void goToSleepButtonOnly(void) {
 #ifdef BOARD_TRMNL_X
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
 #elif defined(BOARD_XTEINK_X4_CLASSIC)
-  arm_x4c_wake_keys();
+  arm_x4c_wake_keys(0); // button-only: no timer
 #else
   esp_sleep_enable_ext0_wakeup((gpio_num_t)pDevice->interrupt_pin, 0);
 #endif

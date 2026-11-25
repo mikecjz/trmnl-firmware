@@ -295,3 +295,31 @@ X4C UC8279: mode=DU win=<w>x<h>@(<x>,<y>) upload=… pon=… drf=… pof=… tot
    first, merged image at 0x0, app-only at 0x20000, ROM loader `303A:1001` is the
    recovery path. Stock firmware is `303A:4002` USB-MSC; this build enumerates as
    USB-CDC.
+
+## Refresh-key tap trace (diagnostics)
+
+Taps are invisible over USB while they happen: opening the console resets the
+chip, and the USB link drops in deep sleep. So the firmware records them itself
+(`src/x4c_tap_trace.cpp`, format and ring in `lib/trmnl` `tap_trace`), in a
+64-record ring in RTC no-init memory that survives deep sleep and the console's
+chip reset. It adds no network traffic and no flash writes, so it does not
+change the timings it measures.
+
+**Reading it:** after tapping, plug in USB and open the console (115200). The
+boot that follows is not a deep-sleep wake, so it prints the whole ring,
+oldest first, between `X4C: tap trace: N records` and `X4C: tap trace: end`.
+
+Times are RTC milliseconds (`esp_rtc_get_time_us() / 1000`), which keep
+counting through deep sleep. "+N" values are ms since the wake's app start
+(ROM + bootloader, about 0.35 s, are not included).
+
+| Line | Fields |
+|---|---|
+| `cycle` (one per wake, at sleep entry) | `wake@` RTC ms of the wake; `reason` (3 = ext1 key, 4 = timer, 0 = reset); `ext1` wake mask; `wifi` / `fetch` / `dl` / `draw` / `sleep` phase times (`-` = not reached); `armed` sleep; `epoch` wall clock at sleep entry (convert any RTC time with `epoch - (sleep_rtc - t) / 1000`); `low_samples` key samples that read low; `task_presses` debounced presses; flags `deferred-in`, `deferred-out`, `manual`, `flashed` |
+| `press` | `@` RTC ms of the press; `src` = `task` (awake sampler), `sleep-snapshot` (last check before sleep), `key-wake` (ext1, time = wake), `deferred-wake` (the 100 ms re-wake; time = the original press); `phase` = `before-fetch`, `after-fetch`, `sleep-entry`, `wake`; `keys` GPIO mask |
+| `manual` | what the press led to: `press->fetch` and `press->flash` delays (`never` = no flash for it), `result` (3 = success), `second-fetch` when it needed a fetch of its own |
+
+A tap that has no `press` line at its wall-clock time was missed. The `cycle`
+line around that time tells whether the device was asleep, booting before the
+key watcher started, or awake (`low_samples` > 0 with no press = shorter than
+the 20 ms debounce).

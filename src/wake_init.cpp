@@ -18,6 +18,7 @@
 #include <wake_init.h>
 #ifdef BOARD_XTEINK_X4_CLASSIC
 #include <x4c_refresh_keys.h>
+#include <x4c_tap_trace.h>
 #endif
 
 #include "messages.h"
@@ -118,11 +119,14 @@ void startBoardHardware(const WakeContext &wake, uint32_t init_time) {
   // From here on a bottom-key press is caught while awake as well, not only as
   // a deep-sleep wake source (see x4c_refresh_keys.h).
   x4c_refresh_keys_watch_start();
-  if (x4c_refresh_keys_take_deferred()) {
+  x4c_tap_trace_boot();
+  X4cKeyPress deferred_press = {0, 0};
+  if (x4c_refresh_keys_take_deferred(&deferred_press)) {
     // The last wake saw a refresh key as it was going to sleep and woke straight
     // back up for it: this is that manual refresh.
     force_full_refresh = true;
     Log_info("Deferred refresh key press: manual fetch + hard refresh requested");
+    x4c_tap_trace_press(TapSource::DeferredWake, TapPhase::Wake, deferred_press.rtc_ms, deferred_press.key_mask);
   }
 #endif
   if (wake.gpio) {
@@ -136,6 +140,9 @@ void startBoardHardware(const WakeContext &wake, uint32_t init_time) {
     if (refresh_key) {
       force_full_refresh = true;
       Log_info("Refresh key wake: manual fetch + hard refresh requested");
+      // The press happened while the chip slept; the wake is the closest time known.
+      x4c_tap_trace_press(TapSource::KeyWake, TapPhase::Wake, x4c_tap_trace_wake_rtc_ms(),
+                          (uint16_t)(esp_sleep_get_ext1_wakeup_status() & X4C_REFRESH_KEY_MASK));
     }
     if (!refresh_key || button_wake_came_from_power_key()) {
       ButtonPressResult button = read_button_presses();

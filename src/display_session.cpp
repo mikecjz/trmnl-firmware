@@ -1,3 +1,6 @@
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_tap_trace.h>
+#endif
 #include <ArduinoLog.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -619,6 +622,9 @@ https_request_err_e downloadAndShow(float batteryVoltage) {
 
   submitStoredLogs();
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  x4c_tap_trace_download_done();
+#endif
   if (stay_awake_for_touchbar) {
     Log.info("Received successfully; staying awake for touch bar taps");
   } else {
