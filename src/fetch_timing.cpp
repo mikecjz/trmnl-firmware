@@ -5,6 +5,7 @@
 #include <refresh_interval.h>
 #include <trmnl_log.h>
 
+#include "esp_log.h"
 #include "esp_rtc_time.h"
 
 namespace {
@@ -28,13 +29,15 @@ void fetchTimingOnWake(void) {
   const FetchWake wake = fetchScheduleOnWake(fetchScheduleState, now, wakeup_reason == ESP_SLEEP_WAKEUP_TIMER);
 
   if (wake.scheduled)
-    Log_info("fetch schedule: timer wake %lld ms after the scheduled point (rtc %llu ms, interval %llu s)",
-             (long long)(wake.drift_us / 1000), (unsigned long long)(now / 1000),
-             (unsigned long long)(interval / US_PER_SECOND));
+    esp_log_write(ESP_LOG_INFO, "fetch",
+                  "fetch schedule: timer wake %lld ms after the scheduled point (rtc %llu ms, interval %llu s)\n",
+                  (long long)(wake.drift_us / 1000), (unsigned long long)(now / 1000),
+                  (unsigned long long)(interval / US_PER_SECOND));
   else
-    Log_info("fetch schedule: new grid at rtc %llu ms (wake reason %d, interval %llu s)",
-             (unsigned long long)(now / 1000), (int)wakeup_reason,
-             (unsigned long long)(interval / US_PER_SECOND));
+    esp_log_write(ESP_LOG_INFO, "fetch",
+                  "fetch schedule: new grid at rtc %llu ms (wake reason %d, interval %llu s)\n",
+                  (unsigned long long)(now / 1000), (int)wakeup_reason,
+                  (unsigned long long)(interval / US_PER_SECOND));
 }
 
 void fetchTimingOnFetchStart(void) {
@@ -45,12 +48,13 @@ void fetchTimingOnFetchStart(void) {
   if (lastFetchStartUs != 0 && now > lastFetchStartUs) {
     const uint64_t period_ms = (now - lastFetchStartUs) / 1000;
     const int64_t drift_ms = (int64_t)period_ms - (int64_t)configured_ms;
-    Log_info("fetch %u start at rtc %llu ms: period %llu ms, configured %llu ms, drift %+lld ms",
-             (unsigned)fetchCount, (unsigned long long)(now / 1000), (unsigned long long)period_ms,
-             (unsigned long long)configured_ms, (long long)drift_ms);
+    esp_log_write(ESP_LOG_INFO, "fetch",
+                  "fetch %u start at rtc %llu ms: period %llu ms, configured %llu ms, drift %+lld ms\n",
+                  (unsigned)fetchCount, (unsigned long long)(now / 1000), (unsigned long long)period_ms,
+                  (unsigned long long)configured_ms, (long long)drift_ms);
   } else {
-    Log_info("fetch %u start at rtc %llu ms: no previous fetch to measure against", (unsigned)fetchCount,
-             (unsigned long long)(now / 1000));
+    esp_log_write(ESP_LOG_INFO, "fetch", "fetch %u start at rtc %llu ms: no previous fetch to measure against\n",
+                  (unsigned)fetchCount, (unsigned long long)(now / 1000));
   }
   lastFetchStartUs = now;
 }
