@@ -7,6 +7,7 @@
 #include <esp_rtc_time.h>
 #include <esp_sleep.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <globals.h>
 #include <misc/clock.h>
@@ -36,6 +37,7 @@ namespace {
     uint32_t press_rtc_ms;
     uint32_t fetch_rtc_ms; // 0 until its fetch starts
     bool second_fetch;
+    uint32_t flash_rtc_ms; // 0 until the full flash for it; the record is written at the request result
   } s_pending = {};
 
   uint32_t rtc_now_ms() { return (uint32_t)(esp_rtc_get_time_us() / 1000ULL); }
@@ -90,7 +92,7 @@ void x4c_tap_trace_press(TapSource source, TapPhase phase, uint32_t rtc_ms, uint
   if (!s_pending.active) {
     // A press taken after the download, before its draw, is served by that
     // draw: its "fetch" is the one that just finished, with no wait.
-    s_pending = {true, source, rtc_ms, phase == TapPhase::BeforeDraw ? rtc_ms : 0, phase == TapPhase::AfterFetch};
+    s_pending = {true, source, rtc_ms, phase == TapPhase::BeforeDraw ? rtc_ms : 0, phase == TapPhase::AfterFetch, 0};
   }
 }
 
@@ -111,13 +113,23 @@ void x4c_tap_trace_draw_done(bool flashed) {
   s_draw_ms = since_wake_ms();
   if (!flashed) return;
   s_flags |= TAP_CYCLE_FLASHED;
-  if (s_pending.active && s_pending.fetch_rtc_ms != 0) {
+  if (s_pending.active && s_pending.fetch_rtc_ms != 0 && s_pending.flash_rtc_ms == 0) {
     s_flags |= TAP_CYCLE_MANUAL;
-    close_pending(rtc_now_ms());
+    s_pending.flash_rtc_ms = rtc_now_ms(); // the Manual record waits for the request result
   }
 }
 
-void x4c_tap_trace_result(int request_result) { s_last_result = request_result; }
+void x4c_tap_trace_result(int request_result) {
+  s_last_result = request_result;
+  if (s_pending.active && s_pending.flash_rtc_ms != 0) close_pending(s_pending.flash_rtc_ms);
+}
+
+void x4c_tap_trace_draw_failed(TapDrawFail reason) {
+  s_flags |= TAP_CYCLE_DRAW_FAILED;
+  push(tapDrawFailRecord(rtc_now_ms(), reason, since_wake_ms(),
+                         (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                         (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+}
 
 void x4c_tap_trace_wifi_path(bool fast_rejoin, bool lease) {
   if (fast_rejoin) s_flags |= TAP_CYCLE_FAST_REJOIN;
@@ -125,7 +137,7 @@ void x4c_tap_trace_wifi_path(bool fast_rejoin, bool lease) {
 }
 
 void x4c_tap_trace_sleep(uint32_t armed_sleep_ms, bool deferred_out) {
-  close_pending(0); // a press this wake never flashed for
+  close_pending(s_pending.flash_rtc_ms); // flashed but no result yet, or never flashed (0)
   if (deferred_out) s_flags |= TAP_CYCLE_DEFERRED_OUT;
   const uint32_t epoch = (uint32_t)systemClock().getTime();
   push(tapCycleRecord(s_wake_rtc_ms, (uint16_t)wakeup_reason, s_ext1_mask, s_flags, s_wifi_up_ms, s_fetch_start_ms,

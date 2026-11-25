@@ -34,6 +34,8 @@ void x4c_tap_trace_fetch_start(void);
 void x4c_tap_trace_download_done(void);
 void x4c_tap_trace_draw_done(bool flashed);
 void x4c_tap_trace_result(int request_result);
+// A draw never reached the panel (see TapDrawFail); records the internal heap.
+void x4c_tap_trace_draw_failed(TapDrawFail reason);
 // How Wi-Fi joined: the remembered AP without a scan, and with the remembered lease.
 void x4c_tap_trace_wifi_path(bool fast_rejoin, bool lease);
 

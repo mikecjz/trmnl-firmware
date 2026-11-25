@@ -34,9 +34,9 @@ static void showScreen(bool should_show_error_now) {
   esp_log_write(ESP_LOG_WARN, "X4C", "showScreen: request result %d\n", (int)request_result);
 #ifdef BOARD_XTEINK_X4_CLASSIC
   x4c_tap_trace_result((int)request_result);
-  // A manual fetch that succeeded served the owed press. One that failed leaves
-  // it owed, and sleep entry retries it once on a 100 ms re-wake.
-  if (force_full_refresh && request_result == HTTPS_SUCCESS) x4c_refresh_keys_settle();
+  // The owed press is settled by its full flash (display.cpp). One that is
+  // still owed at sleep entry (fetch or draw failed) is retried once on a
+  // 100 ms re-wake.
   if (force_full_refresh && request_result != HTTPS_SUCCESS) x4cWifiManualFetchFailed();
 #endif
   Log.info("%s [%d]: request result - %s\r\n", __FILE__, __LINE__, https_request_err_str(request_result));

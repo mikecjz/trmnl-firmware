@@ -142,6 +142,33 @@ TapRecord tapManualRecord(uint32_t press_rtc_ms, TapSource source, uint16_t requ
   return r;
 }
 
+TapRecord tapDrawFailRecord(uint32_t rtc_ms, TapDrawFail reason, uint32_t ms_since_wake, uint32_t free_internal,
+                            uint32_t largest_internal_block) {
+  TapRecord r = {};
+  r.kind = (uint8_t)TapRecordKind::DrawFail;
+  r.a = (uint8_t)reason;
+  r.t_ms = rtc_ms;
+  r.v[0] = ms_since_wake;
+  r.v[1] = free_internal;
+  r.v[2] = largest_internal_block;
+  return r;
+}
+
+namespace {
+  const char *drawFailName(uint8_t reason) {
+    switch ((TapDrawFail)reason) {
+    case TapDrawFail::NoDecoder:
+      return "no-decoder-memory";
+    case TapDrawFail::NoFrameBuffer:
+      return "no-framebuffer";
+    case TapDrawFail::PanelUpdate:
+      return "panel-update";
+    default:
+      return "unknown";
+    }
+  }
+} // namespace
+
 int tapTraceFormat(char *out, size_t size, uint32_t seq, const TapRecord &r) {
   switch ((TapRecordKind)r.kind) {
   case TapRecordKind::Cycle: {
@@ -152,14 +179,14 @@ int tapTraceFormat(char *out, size_t size, uint32_t seq, const TapRecord &r) {
     phaseStr(draw, sizeof(draw), tapPhaseLo(r.v[1]));
     return snprintf(out, size,
                     "tap #%lu cycle wake@%lums reason=%u ext1=0x%03x wifi=%s fetch=%s dl=%s draw=%s sleep=+%u "
-                    "armed=%lums epoch=%lu low_samples=%u task_presses=%u%s%s%s%s%s%s",
+                    "armed=%lums epoch=%lu low_samples=%u task_presses=%u%s%s%s%s%s%s%s",
                     (unsigned long)seq, (unsigned long)r.t_ms, (unsigned)(r.b & 0xFF), (unsigned)(r.v[2] & 0xFFFF),
                     wifi, fetch, dl, draw, (unsigned)(r.v[2] >> 16), (unsigned long)(r.v[3] & 0x00FFFFFF),
                     (unsigned long)r.v[4], (unsigned)(r.v[3] >> 24), (unsigned)(r.b >> 8),
                     (r.a & TAP_CYCLE_DEFERRED_IN) ? " deferred-in" : "",
                     (r.a & TAP_CYCLE_DEFERRED_OUT) ? " deferred-out" : "", (r.a & TAP_CYCLE_MANUAL) ? " manual" : "",
                     (r.a & TAP_CYCLE_FLASHED) ? " flashed" : "", (r.a & TAP_CYCLE_FAST_REJOIN) ? " fast-rejoin" : "",
-                    (r.a & TAP_CYCLE_LEASE) ? " lease" : "");
+                    (r.a & TAP_CYCLE_LEASE) ? " lease" : "", (r.a & TAP_CYCLE_DRAW_FAILED) ? " draw-failed" : "");
   }
   case TapRecordKind::Press:
     return snprintf(out, size, "tap #%lu press @%lums src=%s phase=%s keys=0x%03lx wake+%lums", (unsigned long)seq,
@@ -173,6 +200,10 @@ int tapTraceFormat(char *out, size_t size, uint32_t seq, const TapRecord &r) {
                     (unsigned long)seq, (unsigned long)r.t_ms, sourceName(r.a), fetch, flash, (unsigned)r.b,
                     r.v[2] ? " second-fetch" : "");
   }
+  case TapRecordKind::DrawFail:
+    return snprintf(out, size, "tap #%lu draw-fail @%lums reason=%s wake+%lums free_internal=%lu largest_block=%lu",
+                    (unsigned long)seq, (unsigned long)r.t_ms, drawFailName(r.a), (unsigned long)r.v[0],
+                    (unsigned long)r.v[1], (unsigned long)r.v[2]);
   default:
     return snprintf(out, size, "tap #%lu ?", (unsigned long)seq);
   }

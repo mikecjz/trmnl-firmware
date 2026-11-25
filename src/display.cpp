@@ -21,6 +21,7 @@
 #include <filesystem.h>
 #include <x4c_full_refresh.h>
 #ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_refresh_keys.h>
 #include <x4c_tap_trace.h>
 #endif
 #include <x4c_uc8279.h>
@@ -173,7 +174,11 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
         x4c_full_refresh_note_partial();
       }
       x4c_tap_trace_draw_done(flashed);
+      // The owed press is served when its full flash is on the glass, not when
+      // the fetch succeeded: a fetch whose draw fails must still be retried.
+      if (flashed && force_full_refresh) x4c_refresh_keys_settle();
     }
+    if (!ok) x4c_tap_trace_draw_failed(TapDrawFail::PanelUpdate);
     bCanDoPartial = ok && x4c_uc8279_baseline_valid();
     return ok;
   }

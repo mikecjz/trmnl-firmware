@@ -11,6 +11,7 @@
 #include <trmnl_log.h>
 
 #ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_tap_trace.h>
 #include <x4c_uc8279.h>
 // When set, png_draw() writes decoded rows into the bb_epaper framebuffer
 // instead of streaming them straight to the controller. The X4C transport
@@ -640,6 +641,9 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
   PNG *png = new (std::nothrow) PNG(); // plain new throws when the heap has no 49 KB block, and aborts
   if (!png) {
     Log_error("No memory for the PNG decoder");
+#ifdef BOARD_XTEINK_X4_CLASSIC
+    x4c_tap_trace_draw_failed(TapDrawFail::NoDecoder);
+#endif
     return -1;
   }
   rc = png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
@@ -726,8 +730,16 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
         if (x4c_uc8279_active()) {
           esp_log_write(ESP_LOG_WARN, "X4C", "png: srcBpp=%d colors=%d\n", png->getBpp(),
                         png->getBpp() == 2 ? png_count_colors(png, pPNG, iDataSize) : 0);
-          if (bbep.allocBuffer(false) != BBEP_SUCCESS) {
+          // Reuse the frame buffer a previous draw in this wake allocated.
+          // bbepAllocBuffer() mallocs a new one without freeing the old, and
+          // nothing frees it after a PNG draw, so a second draw in one wake (a
+          // refresh-key tap right after a refresh) leaked 48 KB of internal
+          // RAM and then ran out of memory for the frame buffer or the PNG
+          // decoder: the tap's fetch succeeded but never reached the panel.
+          if (bbep.getBuffer() == nullptr && bbep.allocBuffer(false) != BBEP_SUCCESS) {
             Log_error("X4C: no framebuffer for PNG decode");
+            x4c_tap_trace_draw_failed(TapDrawFail::NoFrameBuffer);
+            delete png;
             return -1;
           }
           bbep.fillScreen(BBEP_WHITE);
