@@ -6,7 +6,9 @@
 #include <display.h>
 #include <globals.h>
 #include <http_result_handling.h>
+#include <net_budget_runtime.h>
 #include <request_handling.h>
+#include <sleep_session.h>
 #include <status_screens.h>
 #include <touch_i2c_lock.h>
 #include <trmnl_log.h>
@@ -20,6 +22,16 @@ void showImageTooBigIfNeeded(https_request_err_e request_result) {
 }
 
 void applyRetryPolicy(https_request_err_e request_result, bool should_show_error_now) {
+  // The wake's network budget ran out, so the fetch was abandoned: do not count
+  // it as a server failure and do not retry now. Sleep to the next grid point
+  // and let the next timer wake try with a fresh budget.
+  if (netBudgetFetchAborted()) {
+    Log_info("%s [%d]: network budget exhausted; sleeping to the next scheduled fetch\r\n", __FILE__, __LINE__);
+    iqs323_task_i2c_lock();
+    display_sleep();
+    goToSleepOnSchedule();
+  }
+
   if (!preferences.isKey(PREFERENCES_CONNECT_API_RETRY_COUNT)) {
     preferences.putInt(PREFERENCES_CONNECT_API_RETRY_COUNT, 1);
   }

@@ -5,6 +5,9 @@
 #include <types.h>
 
 #define HTTP_DEFAULT_TIMEOUT_MS  15000 // Wi-Fi connect and read timeout
+// HTTPClient::setTimeout() takes uint16_t, so a longer value would be
+// truncated: cap the effective read timeout here instead (60 s).
+#define HTTP_MAX_TIMEOUT_MS      60000
 #define HTTP_MODEM_TIMEOUT_MS    60000 // TRMNL X 5 GHz path (AT+HTTPCLIENT)
 #define HTTP_FAST_RETRY_ATTEMPTS 5     // whole request is retried on any error
 #define HTTP_FAST_RETRY_DELAY_MS 2000
@@ -44,6 +47,8 @@ public:
 
 private:
   bool useModem() const;
+  // Give up on the request because the wake's network budget is spent.
+  https_request_err_e abandonForBudget(uint8_t attempt, https_request_err_e last_err);
   https_request_err_e attemptOnce();
   https_request_err_e attemptWiFi();
   https_request_err_e readWiFiBody(HTTPClient &https, int contentLength);
