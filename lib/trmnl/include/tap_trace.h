@@ -28,6 +28,19 @@ enum class TapRecordKind : uint8_t {
   Press = 2,
   /// The outcome of the manual refresh a press asked for.
   Manual = 3,
+  /// A draw that never reached the panel, with why and the internal heap then.
+  DrawFail = 4,
+};
+
+/// Why a draw failed (TapRecord::a for DrawFail records).
+enum class TapDrawFail : uint8_t {
+  Unknown = 0,
+  /// No memory for the PNG decoder (it needs one ~49 KB internal block).
+  NoDecoder = 1,
+  /// No memory for the 48 KB frame buffer.
+  NoFrameBuffer = 2,
+  /// The panel update itself failed.
+  PanelUpdate = 3,
 };
 
 /// Who caught the press.
@@ -69,6 +82,7 @@ enum : uint8_t {
   TAP_CYCLE_FLASHED = 1 << 3,      // this wake did a full flash
   TAP_CYCLE_FAST_REJOIN = 1 << 4,  // Wi-Fi rejoined the remembered AP without a scan
   TAP_CYCLE_LEASE = 1 << 5,        // ... and reused the remembered DHCP lease
+  TAP_CYCLE_DRAW_FAILED = 1 << 6,  // a draw this wake never reached the panel
 };
 
 /// "Not reached in this wake" for the ms-since-wake phase fields.
@@ -126,3 +140,5 @@ TapRecord tapPressRecord(uint32_t press_rtc_ms, TapSource source, TapPhase phase
 /// done; UINT32_MAX when it did not happen.
 TapRecord tapManualRecord(uint32_t press_rtc_ms, TapSource source, uint16_t request_result, uint32_t fetch_delay_ms,
                           uint32_t flash_delay_ms, bool second_fetch);
+TapRecord tapDrawFailRecord(uint32_t rtc_ms, TapDrawFail reason, uint32_t ms_since_wake, uint32_t free_internal,
+                            uint32_t largest_internal_block);

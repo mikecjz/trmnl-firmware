@@ -68,6 +68,15 @@ void test_new_sources_phases_and_wifi_flags() {
   TEST_ASSERT_NOT_NULL(strstr(line, " fast-rejoin lease"));
 }
 
+void test_draw_fail_line_and_flag() {
+  char line[256];
+  tapTraceFormat(line, sizeof(line), 7, tapDrawFailRecord(5000, TapDrawFail::NoDecoder, 9100, 61234, 31744));
+  TEST_ASSERT_EQUAL_STRING(
+    "tap #7 draw-fail @5000ms reason=no-decoder-memory wake+9100ms free_internal=61234 largest_block=31744", line);
+  tapTraceFormat(line, sizeof(line), 8, tapCycleRecord(0, 3, 0, TAP_CYCLE_DRAW_FAILED, 1, 2, 3, 4, 5, 6, 7, 0, 0));
+  TEST_ASSERT_NOT_NULL(strstr(line, " draw-failed"));
+}
+
 void test_press_and_manual_lines() {
   char line[256];
   tapTraceFormat(line, sizeof(line), 3, tapPressRecord(1000, TapSource::SleepSnapshot, TapPhase::SleepEntry, 0x200, 9100));
@@ -94,5 +103,6 @@ int main(int argc, char **argv) {
   RUN_TEST(test_cycle_line_marks_phases_not_reached);
   RUN_TEST(test_press_and_manual_lines);
   RUN_TEST(test_new_sources_phases_and_wifi_flags);
+  RUN_TEST(test_draw_fail_line_and_flag);
   return UNITY_END();
 }
