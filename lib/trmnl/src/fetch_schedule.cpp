@@ -19,9 +19,11 @@ FetchWake fetchScheduleOnWake(FetchSchedule &schedule, uint64_t now_us, bool tim
 
 uint64_t fetchScheduleSleepUs(FetchSchedule &schedule, uint64_t now_us, uint64_t interval_us) {
   if (interval_us == 0) {
-    schedule.due_us = now_us;
+    // Nothing to schedule against, but never arm a zero timer: that would wake
+    // immediately and spin. Use the same floor as every other cycle.
+    schedule.due_us = now_us + FETCH_SCHEDULE_MIN_SLEEP_US;
     schedule.anchored = true;
-    return 0;
+    return FETCH_SCHEDULE_MIN_SLEEP_US;
   }
   if (!schedule.anchored) {
     schedule.due_us = now_us; // no anchor: this cycle starts the grid

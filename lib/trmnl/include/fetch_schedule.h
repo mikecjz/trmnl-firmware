@@ -43,9 +43,9 @@ FetchWake fetchScheduleOnWake(FetchSchedule &schedule, uint64_t now_us, bool tim
 
 /// Call at the end of a normal cycle: advances the grid and returns the time to
 /// arm the deep-sleep timer with. The result is never below
-/// FETCH_SCHEDULE_MIN_SLEEP_US unless the interval itself is 0. A cycle longer
-/// than the interval sleeps only the floor: the device cannot fetch faster than
-/// one cycle takes, so an extra whole interval would only widen the gap.
+/// FETCH_SCHEDULE_MIN_SLEEP_US, whatever the interval. A cycle longer than the
+/// interval sleeps only the floor: the device cannot fetch faster than one
+/// cycle takes, so an extra whole interval would only widen the gap.
 uint64_t fetchScheduleSleepUs(FetchSchedule &schedule, uint64_t now_us, uint64_t interval_us);
 
 /// Start a new grid at `now_us`, e.g. after an off-schedule (retry) sleep.
