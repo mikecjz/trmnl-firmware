@@ -20,6 +20,9 @@
 #include <esp_sleep.h>
 #include <filesystem.h>
 #include <x4c_full_refresh.h>
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_tap_trace.h>
+#endif
 #include <x4c_uc8279.h>
 
 #include "displayed_image.h"
@@ -163,11 +166,13 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
       // previous frame cannot be trusted (boot, wake logo, lost cache) or the
       // DU did not complete. Re-basing on that keeps the interval honest, and
       // it is the only place all of those funnel through.
-      if (x4c_uc8279_flash_count() != flashes_before) {
+      const bool flashed = x4c_uc8279_flash_count() != flashes_before;
+      if (flashed) {
         x4c_full_refresh_note_flash();
       } else {
         x4c_full_refresh_note_partial();
       }
+      x4c_tap_trace_draw_done(flashed);
     }
     bCanDoPartial = ok && x4c_uc8279_baseline_valid();
     return ok;

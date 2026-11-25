@@ -18,6 +18,7 @@
 #include <trmnl_log.h>
 #include <x4c_full_refresh.h>
 #include <x4c_refresh_keys.h>
+#include <x4c_tap_trace.h>
 
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
@@ -88,7 +89,7 @@ static uint64_t timerSleepUs([[maybe_unused]] bool keep_timer, SleepKind kind) {
 // low after the chip sleeps, so ext1 would wake it again immediately and turn
 // every sleep into a logo/dashboard boot loop. Each pin is logged so a capture
 // taken through the sleep shows the levels that were armed.
-static void arm_x4c_wake_keys(void) {
+static void arm_x4c_wake_keys(uint64_t armed_sleep_us) {
   static const uint8_t keys[] = {
       X4C_KEY_POWER_GPIO, X4C_KEY_LEFT_GPIO, X4C_KEY_RIGHT_GPIO, X4C_KEY_CONFIRM_GPIO, X4C_KEY_BACK_GPIO};
   for (uint8_t pin : keys) {
@@ -119,11 +120,37 @@ static void arm_x4c_wake_keys(void) {
   // A refresh key pressed since the wake last checked (or going down right now,
   // which also keeps it out of the mask above) would be lost to this sleep.
   // Remember it and wake again almost at once to do the manual refresh.
-  if (x4c_refresh_keys_take_press_before_sleep()) {
-    x4c_refresh_keys_defer_to_next_wake();
-    esp_sleep_enable_timer_wakeup(X4C_DEFERRED_PRESS_SLEEP_US);
+  X4cKeyPress press = {0, 0, false};
+  bool deferred = x4c_refresh_keys_take_press_before_sleep(&press);
+  X4cKeyPress owed = {0, 0, false};
+  uint8_t owed_attempt = 0;
+  const bool still_owed = x4c_refresh_keys_take_owed(&owed, &owed_attempt);
+  if (deferred) {
+    // The next wake's fetch serves both a new press and one still owed. Keep the
+    // older press time (latency is measured from the first unserved tap) and
+    // both keys, so neither key's release counts again on the re-wake. A fresh
+    // tap gets a fresh attempt.
+    X4cKeyPress next = still_owed ? owed : press;
+    next.key_mask |= press.key_mask;
+    x4c_refresh_keys_defer_to_next_wake(next, 0);
+    x4c_tap_trace_press(TapSource::SleepSnapshot, TapPhase::SleepEntry, press.rtc_ms, press.key_mask);
     esp_log_write(ESP_LOG_WARN, "X4C", "sleep: refresh key pressed while going to sleep, waking right back\n");
+  } else if (still_owed && owed_attempt == 0 && armed_sleep_us != 0) {
+    // (Not in the button-only sleep, which deliberately arms no timer.)
+    // This wake took a press but its manual fetch did not succeed (Wi-Fi or
+    // server error, or the wake ended in an error path): try once more right
+    // away rather than swallowing the tap. A second failure is dropped, so a
+    // dead server cannot turn into a 100 ms wake loop.
+    x4c_refresh_keys_defer_to_next_wake(owed, 1);
+    deferred = true;
+    x4c_tap_trace_press(TapSource::Retry, TapPhase::SleepEntry, owed.rtc_ms, owed.key_mask);
+    esp_log_write(ESP_LOG_WARN, "X4C", "sleep: manual refresh did not complete, retrying on a 100 ms re-wake\n");
   }
+  if (deferred) {
+    esp_sleep_enable_timer_wakeup(X4C_DEFERRED_PRESS_SLEEP_US);
+    armed_sleep_us = X4C_DEFERRED_PRESS_SLEEP_US;
+  }
+  x4c_tap_trace_sleep((uint32_t)(armed_sleep_us / 1000ULL), deferred);
 }
 #endif // BOARD_XTEINK_X4_CLASSIC
 
@@ -186,7 +213,7 @@ static void enterSleep(bool keep_timer, SleepKind kind = SleepKind::Backoff) {
 #ifdef BOARD_TRMNL_X
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
 #elif defined(BOARD_XTEINK_X4_CLASSIC)
-  arm_x4c_wake_keys();
+  arm_x4c_wake_keys(sleep_us);
 #else
   esp_sleep_enable_ext0_wakeup((gpio_num_t)pDevice->interrupt_pin, 0);
 #endif
@@ -272,7 +299,7 @@ void goToSleepButtonOnly(void) {
 #ifdef BOARD_TRMNL_X
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
 #elif defined(BOARD_XTEINK_X4_CLASSIC)
-  arm_x4c_wake_keys();
+  arm_x4c_wake_keys(0); // button-only: no timer
 #else
   esp_sleep_enable_ext0_wakeup((gpio_num_t)pDevice->interrupt_pin, 0);
 #endif

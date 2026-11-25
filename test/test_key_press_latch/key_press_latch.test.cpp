@@ -92,6 +92,37 @@ void test_two_presses_while_awake_latch_one_pending_refresh() {
   TEST_ASSERT_FALSE(keyPressLatchTake(latch));
 }
 
+void test_a_tap_just_before_sampling_counts_within_the_grace() {
+  KeyPressLatch latch;
+  keyPressLatchInitWithGrace(latch, true, 100); // down at start
+  feed(latch, true, 10);
+  TEST_ASSERT_FALSE(keyPressLatchTake(latch));
+  TEST_ASSERT_TRUE(keyPressLatchSample(latch, false) || keyPressLatchSample(latch, false));
+  TEST_ASSERT_TRUE(keyPressLatchTake(latch));
+  // The release does not open a second grace: a later bounce is nothing.
+  keyPressLatchSample(latch, true);
+  feed(latch, false, 5);
+  TEST_ASSERT_FALSE(keyPressLatchTake(latch));
+}
+
+void test_a_key_held_past_the_grace_is_not_a_press() {
+  KeyPressLatch latch;
+  keyPressLatchInitWithGrace(latch, true, 100);
+  feed(latch, true, 150); // stuck / held by a stand
+  feed(latch, false, 5);
+  TEST_ASSERT_FALSE(keyPressLatchTake(latch));
+}
+
+void test_grace_is_ignored_for_a_key_that_starts_released() {
+  KeyPressLatch latch;
+  keyPressLatchInitWithGrace(latch, false, 100);
+  TEST_ASSERT_EQUAL_UINT16(0, latch.grace);
+  feed(latch, false, 5);
+  TEST_ASSERT_FALSE(keyPressLatchTake(latch));
+  feed(latch, true, 2);
+  TEST_ASSERT_TRUE(keyPressLatchTake(latch));
+}
+
 int main(int argc, char **argv) {
   UNITY_BEGIN();
   RUN_TEST(test_a_clean_press_latches_once);
@@ -101,5 +132,8 @@ int main(int argc, char **argv) {
   RUN_TEST(test_a_stuck_key_never_latches);
   RUN_TEST(test_a_press_just_starting_is_seen_before_debounce);
   RUN_TEST(test_two_presses_while_awake_latch_one_pending_refresh);
+  RUN_TEST(test_a_tap_just_before_sampling_counts_within_the_grace);
+  RUN_TEST(test_a_key_held_past_the_grace_is_not_a_press);
+  RUN_TEST(test_grace_is_ignored_for_a_key_that_starts_released);
   return UNITY_END();
 }

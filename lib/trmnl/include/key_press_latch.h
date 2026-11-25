@@ -26,11 +26,20 @@ struct KeyPressLatch {
   uint8_t run;
   /// A new press was seen and not yet taken.
   bool latched;
+  /// Samples left in which releasing a key that was already down when sampling
+  /// started still counts as a press (see keyPressLatchInitWithGrace()).
+  uint16_t grace;
 };
 
 /// Starts tracking from the key's current level. A key that is already down
 /// (low) does not count as a press.
 void keyPressLatchInit(KeyPressLatch &latch, bool level_low);
+
+/// Like keyPressLatchInit(), for a key that may have been tapped just before
+/// sampling could start (the boot window). If the key is down now and is let go
+/// within `grace_samples`, that counts as a press. A key that stays down longer
+/// (stuck, or held by a stand) still never latches.
+void keyPressLatchInitWithGrace(KeyPressLatch &latch, bool level_low, uint16_t grace_samples);
 
 /// Feeds one sample. Returns true when this sample completed a new press.
 bool keyPressLatchSample(KeyPressLatch &latch, bool level_low);

@@ -14,7 +14,9 @@
 #include <wake_init.h>
 #include <wifi_session.h>
 #ifdef BOARD_XTEINK_X4_CLASSIC
+#include <wifi_network.h>
 #include <x4c_refresh_keys.h>
+#include <x4c_tap_trace.h>
 #endif
 
 #ifdef BOARD_TRMNL_X
@@ -30,6 +32,13 @@
 static void showScreen(bool should_show_error_now) {
   https_request_err_e request_result = downloadAndShow(battery_voltage);
   esp_log_write(ESP_LOG_WARN, "X4C", "showScreen: request result %d\n", (int)request_result);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  x4c_tap_trace_result((int)request_result);
+  // A manual fetch that succeeded served the owed press. One that failed leaves
+  // it owed, and sleep entry retries it once on a 100 ms re-wake.
+  if (force_full_refresh && request_result == HTTPS_SUCCESS) x4c_refresh_keys_settle();
+  if (force_full_refresh && request_result != HTTPS_SUCCESS) x4cWifiManualFetchFailed();
+#endif
   Log.info("%s [%d]: request result - %s\r\n", __FILE__, __LINE__, https_request_err_str(request_result));
   showImageTooBigIfNeeded(request_result);
   applyRetryPolicy(request_result, should_show_error_now); // may sleep
@@ -46,6 +55,11 @@ static void showScreen(bool should_show_error_now) {
  * @return none
  */
 void bl_init(void) {
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // First thing: from here on a bottom-key press is seen while awake. A key
+  // tapped before this (ROM, bootloader) is still caught on release.
+  x4c_refresh_keys_watch_start();
+#endif
   uint32_t init_time = bootEarly();
   wifiSessionInit();
   initPeripherals();
@@ -65,6 +79,9 @@ void bl_init(void) {
   logVersions();
 
   wifiSessionConnect(wake.showErrorsNow);
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  x4c_tap_trace_wifi_up();
+#endif
   updateTimeSinceSleep();
   ensureDeviceSetUp(); // may sleep
   submitStoredLogs();
@@ -73,7 +90,16 @@ void bl_init(void) {
 #ifdef BOARD_XTEINK_X4_CLASSIC
   // A refresh key pressed while this wake was booting or joining Wi-Fi: make
   // this wake's fetch the manual one rather than dropping the press.
-  if (x4c_refresh_keys_take_press() && !force_full_refresh) {
+  X4cKeyPress press = {0, 0, false};
+  const bool pressed_before_fetch = x4c_refresh_keys_take_press(&press);
+  if (pressed_before_fetch) {
+    // Recorded even when this wake is already a manual refresh (key wake): the
+    // press is then merged into it.
+    x4c_tap_trace_press(press.boot_grace ? TapSource::BootGrace : TapSource::Task, TapPhase::BeforeFetch,
+                        press.rtc_ms, press.key_mask);
+    x4c_refresh_keys_owe(press, 0);
+  }
+  if (pressed_before_fetch && !force_full_refresh) {
     force_full_refresh = true;
     esp_log_write(ESP_LOG_WARN, "X4C", "refresh key pressed while awake: this fetch is the manual refresh\n");
   }
@@ -82,10 +108,14 @@ void bl_init(void) {
   // OTA checking, image checking and drawing
   showScreen(wake.showErrorsNow);
 #ifdef BOARD_XTEINK_X4_CLASSIC
-  // A refresh key pressed during the fetch or the draw: Wi-Fi is still up, so
-  // run the manual refresh now. Bounded so a stream of presses cannot hold the
-  // device awake; a press after the last round is caught again at sleep entry.
-  for (int round = 0; round < X4C_MAX_MANUAL_REFRESH_ROUNDS && x4c_refresh_keys_take_press(); round++) {
+  // A refresh key pressed during the draw (a press during the fetch was already
+  // served by that draw, see x4c_refresh_keys_check_before_draw()). Wi-Fi is
+  // kept up through the draw, so the manual fetch runs on the open connection.
+  // Bounded so a stream of presses cannot hold the device awake; a press after
+  // the last round is caught again at sleep entry.
+  for (int round = 0; round < X4C_MAX_MANUAL_REFRESH_ROUNDS && x4c_refresh_keys_take_press(&press); round++) {
+    x4c_tap_trace_press(TapSource::Task, TapPhase::AfterFetch, press.rtc_ms, press.key_mask);
+    x4c_refresh_keys_owe(press, 0);
     esp_log_write(ESP_LOG_WARN, "X4C", "refresh key pressed during the fetch: manual refresh now\n");
     force_full_refresh = true;
     showScreen(true);

@@ -1,3 +1,7 @@
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_refresh_keys.h>
+#include <x4c_tap_trace.h>
+#endif
 #include <ArduinoLog.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -515,6 +519,10 @@ https_request_err_e downloadAndShow(float batteryVoltage) {
   }
 
   if (!status && result == HTTPS_SUCCESS) { // this means we already have this image stored in SPIFFS
+#ifdef BOARD_XTEINK_X4_CLASSIC
+    // A tap during the fetch is served by this draw (the image is current).
+    x4c_refresh_keys_check_before_draw();
+#endif
     char szTemp[36];
     filesystem_fix_filename(apiDisplayResult.response.filename.c_str(), szTemp);
     if (DisplayedImage::matches(szTemp) && !force_full_refresh) {
@@ -619,8 +627,24 @@ https_request_err_e downloadAndShow(float batteryVoltage) {
 
   submitStoredLogs();
 
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  x4c_tap_trace_download_done();
+  // A tap during the fetch is served by this draw: the image just downloaded is
+  // the current one, so it only needs to be drawn as the full flash.
+  x4c_refresh_keys_check_before_draw();
+#endif
+#ifdef BOARD_XTEINK_X4_CLASSIC
+  // Keep the connection through the draw: a tap during the draw then runs its
+  // fetch on the open link (bl.cpp) instead of rejoining Wi-Fi. enterSleep()
+  // turns the radio off; at a 10 s interval it is on most of the time anyway.
+  const bool keep_wifi_through_draw = true;
+#else
+  const bool keep_wifi_through_draw = false;
+#endif
   if (stay_awake_for_touchbar) {
     Log.info("Received successfully; staying awake for touch bar taps");
+  } else if (keep_wifi_through_draw) {
+    Log.info("%s [%d]: Received successfully; keeping WiFi up through the draw\r\n", __FILE__, __LINE__);
   } else {
     WiFi.disconnect(true); // no need for WiFi, save power starting here
     Log.info("%s [%d]: Received successfully; WiFi off.\r\n", __FILE__, __LINE__);

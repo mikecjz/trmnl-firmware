@@ -134,164 +134,55 @@ How the manual refresh works:
    flash: bottom left / right / confirm / back (GPIO 5 / 2 / 8 / 9).
 7. Presses while the unit is **awake** are caught too. ext1 only sees a key while
    the chip sleeps, and at a short refresh interval most of a cycle is awake time
-   (boot, Wi-Fi, fetch, draw; the fetch grid takes that time out of the sleep),
-   so without this most presses landed in an awake window and were dropped.
-   `src/x4c_refresh_keys.cpp` samples the four bottom keys every 10 ms from boot
-   (debounced by `lib/trmnl` `key_press_latch`; a key already down at boot, i.e.
-   the wake press or a stuck key, does not count until released):
-   - pressed before the fetch starts: that fetch becomes the manual refresh;
-   - pressed during the fetch or draw: `bl.cpp` runs one more fetch with a hard
-     refresh while Wi-Fi is still up (at most 2 extra per wake);
-   - pressed as the unit goes to sleep: `arm_x4c_wake_keys()` records it in RTC
-     memory and arms a 100 ms timer, so the next wake does the manual refresh.
-   Each caught press is logged from the main task as `X4C: refresh key pressed
-   while awake: …` / `… during the fetch: …`. The sampling task itself never
-   logs: `esp_log_write()` needs more stack than a 2 KB task has (newlib's
-   vfprintf alone is an 800-byte frame), and an early build that logged from the
-   task panic-reset on every awake press, which showed as a cold boot (wake logo,
-   then the dashboard) instead of a quiet redraw.
+   (boot, Wi-Fi, fetch, draw; the fetch grid takes that time out of the sleep).
+   `src/x4c_refresh_keys.cpp` samples the four bottom keys every 10 ms, started
+   first thing in `bl_init()` (debounced by `lib/trmnl` `key_press_latch`). A
+   key that is already down then and comes up within 1 s was tapped during the
+   boot window and counts too; the key that woke the chip, a deferred press's
+   key, or a key held longer (stuck, held by a stand) does not. Where the press
+   lands decides what serves it:
+   - before the fetch starts: that fetch becomes the manual refresh;
+   - during the fetch (after the download, before the draw): that draw becomes
+     the full flash, since the image was just fetched (no second fetch);
+   - during the draw: Wi-Fi is kept up through the draw on this board, so
+     `bl.cpp` runs the manual fetch straight away on the open connection (at
+     most 2 per wake);
+   - as the unit goes to sleep: `arm_x4c_wake_keys()` records it in RTC memory
+     and arms a 100 ms timer, so the next wake does the manual refresh.
+   A press stays owed until a manual fetch for it succeeds. If it fails (Wi-Fi,
+   server, an error path that sleeps), sleep entry retries it once on a 100 ms
+   re-wake; a second failure is dropped so a dead server cannot loop.
+   A deferred or key wake rejoins the last AP on its channel without a scan and
+   reuses that join's DHCP lease (`src/wifi_network.cpp`, from PR #1 plus the
+   lease). A failed manual fetch on a reused lease forgets it.
+   The sampling task itself never logs: `esp_log_write()` needs more stack than
+   the task has (newlib's vfprintf alone is an 800-byte frame), and an early
+   build that logged from the task panic-reset on every awake press.
 
-The server names each PNG `screen-<sha256>-<changed>`, so the fetch after a
-button press is a real `/api/display` round-trip: a changed screen returns a new
-filename and downloads normally; an unchanged one keeps the same filename and is
-redrawn from flash.
+## Refresh-key tap trace (diagnostics)
 
-To bind the action to a different key, change `X4C_REFRESH_KEY_MASK` in
-`include/config.h`. The remaining keys are `X4C_SIDE_UP_GPIO` and
-`X4C_SIDE_DOWN_GPIO`.
+Taps are invisible over USB while they happen: opening the console resets the
+chip, and the USB link drops in deep sleep. So the firmware records them itself
+(`src/x4c_tap_trace.cpp`, format and ring in `lib/trmnl` `tap_trace`), in a
+64-record ring in RTC no-init memory that survives deep sleep and the console's
+chip reset. It adds no network traffic and no flash writes, so it does not
+change the timings it measures.
 
-## Battery and charger (implemented)
+**Reading it:** after tapping, plug in USB and open the console (115200). The
+boot that follows is not a deep-sleep wake, so it prints the whole ring,
+oldest first, between `X4C: tap trace: N records` and `X4C: tap trace: end`.
 
-- `BATT_CW2017` / `Cw2017Battery` reads the gauge at I2C 0x63 on SDA 39 / SCL 38
-  at 400 kHz. The Classic keeps its factory BATINFO calibration, so the driver
-  never writes the 80-byte profile; it validates VERSION (`(v & 0xFD) == 0x0D`)
-  and reads VCELL. If the gauge does not answer, the last good value is reused;
-  before any reading it reports a nominal 3.9 V with a warning rather than
-  failing the boot. `BATT_ADC` is wrong on this board: GPIO0 is a button.
-- `X4CStatPower` reads GPIO21 `STAT` (active HIGH) and feeds the existing
-  `ChargingStatus` path, so `Battery-Charging` and the status screen reflect it.
-  There is no PG/VBUS pin, so USB presence is reported `CONNECTED` only while
-  charging and `UNKNOWN` otherwise — no invented DISCONNECTED.
+Times are RTC milliseconds (`esp_rtc_get_time_us() / 1000`), which keep
+counting through deep sleep. "+N" values are ms since the wake's app start
+(ROM + bootloader, about 0.35 s, are not included).
 
-## UC8279 update path — what it takes for an image to appear
+| Line | Fields |
+|---|---|
+| `cycle` (one per wake, at sleep entry) | `wake@` RTC ms of the wake; `reason` (3 = ext1 key, 4 = timer, 0 = reset); `ext1` wake mask; `wifi` / `fetch` / `dl` / `draw` / `sleep` phase times (`-` = not reached); `armed` sleep; `epoch` wall clock at sleep entry (convert any RTC time with `epoch - (sleep_rtc - t) / 1000`); `low_samples` key samples that read low; `task_presses` debounced presses; flags `deferred-in`, `deferred-out`, `manual`, `flashed`, `fast-rejoin`, `lease` |
+| `press` | `@` RTC ms of the press; `src` = `task` (awake sampler), `boot-grace` (tapped before sampling started), `sleep-snapshot` (last check before sleep), `key-wake` (ext1, time = wake), `deferred-wake` (the 100 ms re-wake; time = the original press), `retry` (a failed manual fetch tried again); `phase` = `before-fetch`, `before-draw`, `after-fetch`, `sleep-entry`, `wake`; `keys` GPIO mask |
+| `manual` | what the press led to: `press->fetch` and `press->flash` delays (`never` = no flash for it), `result` (3 = success), `second-fetch` when it needed a fetch of its own |
 
-Confirmed on the unit on 2026-11-22 with a direct driver using CrossPoint's
-reference sequence. The `0x70` probe works, but the generic `bb_epaper` UC81xx
-update path cannot drive this glass. Two independent faults:
-
-1. **No plane data.** `bb_epaper`'s `refresh()` sends the init sequence and DRF
-   only; pixel data is uploaded exclusively by `writePlane()`. A test that calls
-   `refresh()` alone leaves the controller RAM undefined, so the panel stays in
-   its undriven striped state even though `refresh()` reports success. The
-   shipping path does call `writePlane(PLANE_0)` (DTM2 only) and still misses
-   the old-plane seed required by the full-refresh waveform.
-2. **Wrong geometry.** The UC8279 is addressed as 800x600 and the visible 480
-   gate lines start at gate **120**. A plane upload must be 600 rows of 100
-   bytes: 120 white rows, then the 480 image rows. `bb_epaper`'s
-   `EP75_800x480` profile streams only 480 rows starting at gate 0, so even a
-   correct upload is shifted and the last 120 visible gates stay undefined.
-
-Working full-refresh sequence (verbatim from CrossPoint's `Uc8279X4Driver`):
-
-- Init: PSR `0x00` `0x37 0x4D`; TRES `0x61` 800x600; GSST `0x65` 0/0/0/0; PFS
-  `0x03` `0x20`; gate scan `0xE1` `0x02`. No PLL on the X4C; PWR/VDCS/BTST stay
-  OTP/MTP-programmed.
-- Frame: DTM2 `0x13` <- 600 rows (120 white + image); DTM1 `0x10` <- 600 rows
-  white (full-refresh old-plane seed); CDI `0x50` `0x97`; CCSET `0xE0` `0x02`;
-  TSSET `0xE5` `0x1E`; PON `0x04`; wait BUSY; PSR `0x00` `0x17 0x4D`; DRF
-  `0x12`; wait BUSY; POF `0x02`.
-- BUSY is idle-HIGH. A real full refresh drops BUSY after DRF and holds it for
-  about 1.24 s.
-- Measured on this unit at 10 MHz SPI: upload 102 ms (two 60 KB planes), PON
-  40 ms, DRF 1240 ms, POF 77 ms, about 1.46 s per frame, repeatable across
-  cycles.
-
-The shipping `env:xteink_x4_classic` build now routes every UC8279 update
-through `src/x4c_uc8279.cpp` (called from `display_update_epaper()` and
-`display_wipe()`), so the dashboard path uses this sequence. The UC8179 profile
-still uses the generic `bb_epaper` path: it needs its own PLL/booster/VCOM
-bring-up and has not been validated on hardware.
-
-### Partial (DU) refresh
-
-A timer fetch used to repaint the whole panel through the OTP GC waveform, which
-is the ~1.46 s black/white flash. The UC8279 can instead run its built-in DU
-waveform, which only moves pixels whose old/new bit differs. `src/x4c_uc8279.cpp`
-implements that as `x4c_uc8279_partial_update()`:
-
-- DTM2 `0x13` <- new frame, DTM1 `0x10` <- the frame on the glass (both 600
-  rows, 120-gate offset).
-- CDI `0x50` `0xD7`, CCSET `0xE0` `0x02`, TSSET `0xE5` `0x5A` (DU waveform),
-  PFS `0x03` `0x20`, gate scan `0xE1` `0x02`, PON `0x04`, wait BUSY.
-- PTIN `0x91` + PTL `0x90` with the dirty rectangle (x byte-aligned, y shifted by
-  the 120-gate offset), PSR `0x00` `0x17` `0x4D`, DRF `0x12`, wait BUSY.
-- PTOUT `0x92`, POF `0x02`, wait BUSY.
-
-`display_update_epaper()` computes the dirty rectangle on-device by diffing the
-new framebuffer against the frame that is physically on the glass. The
-controller RAM cannot be read back (the X4C SPI bus has no MISO), and this build
-has PSRAM disabled, so a second framebuffer is not an option: the new frame is
-streamed to DTM2 first, and then the cached PNG named by `DisplayedImage` is
-decoded over the same framebuffer, diffing each row against the bytes still
-there before replacing them. `fb` therefore ends up holding the previous frame
-and is streamed to DTM1. The reconstructed frame's FNV-1a hash is checked
-against the hash of the frame the transport last pushed; a mismatch (or a failed
-decode) falls back to the OTP flash using the already-uploaded DTM2, so a wake
-logo, a message screen or a lost cache file can never produce a wrong partial.
-
-Do not add a 48 KB shadow or previous-frame buffer here. The image path already
-allocates the 48 KB 1-bpp framebuffer after Wi-Fi starts, and a 48 KB
-allocation that fails leaves the panel showing whatever was there before (the
-X4C build reports `X4C: no framebuffer for PNG decode` in its stored log). The
-previous PNG is therefore snapshotted into a static 16 KB buffer *before* the
-new image is decoded, so the ~43 KB PNG decoder for the rebuild can reuse the
-block the new-image decode just freed without a small heap allocation
-fragmenting it.
-
-Full OTP flashes are kept for: the boot/first paint after a cold or software
-reset, `force_full_refresh` (the four bottom keys, see above),
-`maximum_compatibility`, every 8th paint (`iUpdateCount & 7`, the ghosting
-backstop), an invalid baseline, and any geometry or window the controller cannot
-drive partially.
-
-The partial is a differential drive, not a frame buffer replay: an unchanged
-pixel never moves, so there is no black/white inversion. The PTL window narrows
-the gate scan as well; a full-panel window is used when the changed region is
-unknown. The two 600-row plane uploads (~102 ms at 10 MHz) are unchanged and
-remain the fixed cost floor.
-
-Console verification, on the serial log of an automatic timer fetch:
-
-```
-X4C UC8279: mode=DU win=<w>x<h>@(<x>,<y>) upload=… pon=… drf=… pof=… total=…
-```
-
-`mode=DU` and `drf`/`total` well below the full-flash timing (~1240 ms /
-~1460 ms) confirm the partial path. A `mode=GC` line is a full flash (boot,
-`maximum_compatibility`, the every-8th backstop, or a lost previous frame).
-`win=` should be the size of the counter/region that changed, not 800x480.
-
-## Open items that still need the unit
-
-1. **Panel geometry / waveform.** Diagnosed: the generic `bb_epaper` path never
-   loads plane data for a standalone refresh and streams 480 rows at gate 0
-   instead of 600 rows with the 120-gate offset. See "UC8279 update path" above
-   for the verified sequence and timings. Ported for UC8279 in
-   `src/x4c_uc8279.cpp`; UC8179 still needs the same treatment plus its own
-   power-rail bring-up.
-2. **Side-key up/down mapping disagrees between the two sources.** freeink maps
-   GPIO0 -> up/previous and GPIO7 -> down/next; Papyrix has `up = 7, down = 0`.
-   One `#define` (`X4C_SIDE_KEY_0_IS_UP`) in `include/config.h` makes this a
-   one-line change after a physical press. It does not block the panel test.
-3. **Power/wake behaviour is unverified on hardware.** Papyrix wakes only on the
-   power button (GPIO3); CrossPoint's boot path has a non-interrupt input on
-   GPIO4 whose role is still pending. Whether the GPIO1 rail and SD power GPIO6
-   must be held in deep sleep, and the resulting sleep current, are measurements.
-4. **`LIGHT_SLEEP` vs `DEEP_SLEEP`** for the mono panel is intentionally still
-   open: `display_sleep()` uses `LIGHT_SLEEP` for mono panels, and the X4C may
-   need `DEEP_SLEEP` so the booster does not drain the battery. Documented here
-   until there is a measurement; not changed on a guess.
-5. **Flashing discipline.** See `docs/xteink-x4c-recovery.md`: full 16 MB backup
-   first, merged image at 0x0, app-only at 0x20000, ROM loader `303A:1001` is the
-   recovery path. Stock firmware is `303A:4002` USB-MSC; this build enumerates as
-   USB-CDC.
+A tap that has no `press` line at its wall-clock time was missed. The `cycle`
+line around that time tells whether the device was asleep, booting before the
+key watcher started, or awake (`low_samples` > 0 with no press = shorter than
+the 20 ms debounce).
