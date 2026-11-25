@@ -16,6 +16,9 @@
 #include <touch_i2c_lock.h>
 #include <trmnl_log.h>
 #include <wake_init.h>
+#ifdef BOARD_XTEINK_X4_CLASSIC
+#include <x4c_refresh_keys.h>
+#endif
 
 #include "messages.h"
 
@@ -112,6 +115,15 @@ void startBoardHardware(const WakeContext &wake, uint32_t init_time) {
   bool double_click = false;
 #ifdef BOARD_XTEINK_X4_CLASSIC
   button_log_wake_source();
+  // From here on a bottom-key press is caught while awake as well, not only as
+  // a deep-sleep wake source (see x4c_refresh_keys.h).
+  x4c_refresh_keys_watch_start();
+  if (x4c_refresh_keys_take_deferred()) {
+    // The last wake saw a refresh key as it was going to sleep and woke straight
+    // back up for it: this is that manual refresh.
+    force_full_refresh = true;
+    Log_info("Deferred refresh key press: manual fetch + hard refresh requested");
+  }
 #endif
   if (wake.gpio) {
     Log_info("GPIO wakeup detected (%d)", wake.reason);
