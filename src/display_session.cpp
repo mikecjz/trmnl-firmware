@@ -11,6 +11,7 @@
 #include <device_id.h>
 #include <display.h>
 #include <display_session.h>
+#include <fetch_timing.h>
 #include <filesystem.h>
 #include <globals.h>
 #include <logging_parcers.h>
@@ -483,6 +484,7 @@ static ApiDisplayInputs loadApiDisplayInputs(Preferences &preferences, float bat
 }
 
 https_request_err_e downloadAndShow(float batteryVoltage) {
+  fetchTimingOnFetchStart(); // logs the measured fetch-to-fetch period
   image_err_e png_res = PNG_DECODE_ERR;
   bmp_err_e bmp_res = BMP_NOT_BMP;
   auto apiDisplayInputs = loadApiDisplayInputs(preferences, batteryVoltage);

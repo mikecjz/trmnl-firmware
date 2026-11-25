@@ -4,6 +4,7 @@
 #include <bl.h>
 #include <display.h>
 #include <display_session.h>
+#include <fetch_timing.h>
 #include <globals.h>
 #include <request_handling.h>
 #include <setup_session.h>
@@ -41,6 +42,7 @@ void bl_init(void) {
   initPeripherals();
   WakeContext wake = readWakeContext();
   openPreferences();
+  fetchTimingOnWake();
   startBoardHardware(wake, init_time);
   if (wake.reason != ESP_SLEEP_WAKEUP_TIMER) showWakeLogo();
   logVersions();
@@ -60,7 +62,7 @@ void bl_init(void) {
   // display go to sleep
   Log_info("%s [%d]: BL done, going to sleep...", __FILE__, __LINE__);
   display_sleep();
-  goToSleep();
+  goToSleepOnSchedule();
 } /* bl_init() */
 
 /**

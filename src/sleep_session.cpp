@@ -6,6 +6,7 @@
 #include <board_config.h>
 #include <config.h>
 #include <display.h>
+#include <fetch_timing.h>
 #include <filesystem.h>
 #include <globals.h>
 #include <misc/clock.h>
@@ -37,14 +38,23 @@
 RTC_DATA_ATTR static uint64_t next_timer_wake_rtc_us = 0;
 #endif
 
-// The refresh interval, or (keep_timer) the time left on the last sleep's timer
-static uint64_t timerSleepUs([[maybe_unused]] bool keep_timer) {
-  uint64_t sleep_us = (uint64_t)refreshInterval.seconds() * SLEEP_uS_TO_S_FACTOR;
+// Whether this sleep ends a normal cycle (so the next fetch keeps the schedule
+// grid) or is an off-schedule backoff (retry, Wi-Fi failure, portal).
+enum class SleepKind { Backoff, Scheduled };
+
+// The time left until the next scheduled fetch for a normal cycle, the refresh
+// interval for a backoff, or (keep_timer) the time left on the last sleep's
+// timer. A scheduled cycle's awake time is taken out of the sleep, so it does
+// not lengthen the fetch-to-fetch period (see fetch_schedule.h).
+static uint64_t timerSleepUs([[maybe_unused]] bool keep_timer, SleepKind kind) {
+  uint64_t sleep_us =
+    kind == SleepKind::Scheduled ? fetchTimingScheduledSleepUs() : fetchTimingBackoffSleepUs();
 #ifdef BOARD_TRMNL_X
   const uint64_t now = esp_rtc_get_time_us();
   if (keep_timer && next_timer_wake_rtc_us != 0) {
     const uint64_t remaining = next_timer_wake_rtc_us > now ? next_timer_wake_rtc_us - now : 0;
     sleep_us = min(sleep_us, max(remaining, (uint64_t)KEPT_TIMER_MIN_SLEEP_US));
+    fetchTimingNoteArmedSleep(sleep_us);
   }
   next_timer_wake_rtc_us = now + sleep_us;
 #endif
@@ -54,9 +64,10 @@ static uint64_t timerSleepUs([[maybe_unused]] bool keep_timer) {
 /**
  * @brief Function to sleep preparing and go to sleep
  * @param keep_timer sleep until the last sleep's timer, not for the refresh interval
+ * @param kind scheduled for a normal cycle, backoff for a retry
  * @return none
  */
-static void enterSleep(bool keep_timer) {
+static void enterSleep(bool keep_timer, SleepKind kind = SleepKind::Backoff) {
   Log.info("%s [%d]: go to sleep\r\n", __FILE__, __LINE__);
   submitStoredLogs();
 
@@ -89,7 +100,7 @@ static void enterSleep(bool keep_timer) {
 #endif
 
   filesystem_deinit();
-  const uint64_t sleep_us = timerSleepUs(keep_timer);
+  const uint64_t sleep_us = timerSleepUs(keep_timer, kind);
   uint32_t time_to_sleep = sleep_us / SLEEP_uS_TO_S_FACTOR;
   iPrevWakeTime = millis() - startup_time; // save for statistics
   Log.info("%s [%d]: total awake time - %d ms\r\n", __FILE__, __LINE__, iPrevWakeTime);
@@ -136,6 +147,12 @@ static void enterSleep(bool keep_timer) {
 }
 
 void goToSleep(void) { enterSleep(false); }
+
+void goToSleepOnSchedule(void) {
+  // The end of a normal cycle: keep the fetch grid, so the period is the
+  // configured interval rather than interval + awake time.
+  enterSleep(false, SleepKind::Scheduled);
+}
 
 #ifdef BOARD_TRMNL_X
 void goToSleepKeepingTimer(void) {
