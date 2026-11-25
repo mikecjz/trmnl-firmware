@@ -8,6 +8,7 @@ void assert_response_equal(ApiDisplayResponse expected, ApiDisplayResponse actua
   TEST_ASSERT_EQUAL(expected.update_firmware, actual.update_firmware);
   TEST_ASSERT_EQUAL_STRING(expected.firmware_url.c_str(), actual.firmware_url.c_str());
   TEST_ASSERT_EQUAL_UINT64(expected.refresh_rate, actual.refresh_rate);
+  TEST_ASSERT_EQUAL_UINT32(expected.full_refresh_interval, actual.full_refresh_interval);
   TEST_ASSERT_EQUAL(expected.reset_firmware, actual.reset_firmware);
   TEST_ASSERT_EQUAL(expected.special_function, actual.special_function);
   TEST_ASSERT_EQUAL_STRING(expected.action.c_str(), actual.action.c_str());
@@ -68,6 +69,22 @@ void test_parseResponse_apiDisplay_treats_unknown_sf_as_none(void) {
   TEST_ASSERT_EQUAL(parsed.special_function, SPECIAL_FUNCTION::SF_NONE);
 }
 
+void test_parseResponse_apiDisplay_parses_full_refresh_interval(void) {
+  String input = "{\"status\":200,\"refresh_rate\":300,\"full_refresh_interval\":7200}";
+
+  auto parsed = parseResponse_apiDisplay(input);
+  TEST_ASSERT_EQUAL_UINT32(7200, parsed.full_refresh_interval);
+}
+
+// An older server does not send the key at all: that must parse as 0, which the
+// full-refresh schedule reads as "use the firmware default" (3600 s).
+void test_parseResponse_apiDisplay_missing_full_refresh_interval_is_zero(void) {
+  String input = "{\"status\":200,\"refresh_rate\":300}";
+
+  auto parsed = parseResponse_apiDisplay(input);
+  TEST_ASSERT_EQUAL_UINT32(0, parsed.full_refresh_interval);
+}
+
 void setUp(void) {
   // set stuff up here
 }
@@ -82,6 +99,8 @@ void process() {
   RUN_TEST(test_parseResponse_apiDisplay_deserializationError);
   RUN_TEST(test_parseResponse_apiDisplay_treats_unknown_sf_as_none);
   RUN_TEST(test_parseResponse_apiDisplay_missing_fields);
+  RUN_TEST(test_parseResponse_apiDisplay_parses_full_refresh_interval);
+  RUN_TEST(test_parseResponse_apiDisplay_missing_full_refresh_interval_is_zero);
   UNITY_END();
 }
 
