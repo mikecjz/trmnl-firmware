@@ -12,6 +12,13 @@
 /** Prepare peripherals, enable timer + GPIO wake, enter deep sleep. */
 void goToSleep(void);
 
+/**
+ * End of a normal cycle: sleep until the next point of the fetch schedule,
+ * taking this cycle's awake time out of the sleep so the fetch-to-fetch period
+ * is the configured interval instead of interval + awake time.
+ */
+void goToSleepOnSchedule(void);
+
 #ifdef BOARD_TRMNL_X
 /** Sleeps until the last sleep's timer. Returns without sleeping if it is already due. */
 void goToSleepKeepingTimer(void);
