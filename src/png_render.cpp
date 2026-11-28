@@ -2,6 +2,7 @@
 #include <board_config.h>
 #include <color_reduce.h>
 #include <epd_driver.h>
+#include <epd_ram_diag.h>
 #include <globals.h>
 #include <new>
 #include <png_render.h>
@@ -400,6 +401,11 @@ int png_draw(PNGDRAW *pDraw) {
       } // for x
     }
   }
+  if (iPlane == PNG_1_BIT || iPlane == PNG_2_BIT_BOTH) {
+    epd_diag_record_row(0, pDraw->y, pTemp, (iWidth + 7) / 8); // 0x24, new image
+  } else if (iPlane == PNG_1_BIT_INVERTED || iPlane == PNG_2_BIT_INVERTED) {
+    epd_diag_record_row(1, pDraw->y, pTemp, (iWidth + 7) / 8); // 0x26, inverted copy
+  }
   bbep.writeData(pTemp, (iWidth + 7) / 8);
   return 1;
 } /* png_draw() */
@@ -679,6 +685,7 @@ int png_to_epd(const uint8_t *pPNG, int iDataSize, bool bPrevious) {
           bbep.begin(dpList[pDevice->panel_set][0].OneBit);
         }
         rc = REFRESH_PARTIAL; // the new image is 1bpp - try a partial update
+        epd_diag_begin_image((bbep.width() + 7) / 8, bbep.height());
         bbep.startWrite(PLANE_0); // start writing image data to plane 0
         png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
         if (png->getBpp() == 1 || png->getBpp() > 2) {

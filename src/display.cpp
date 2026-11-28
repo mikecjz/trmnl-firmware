@@ -9,6 +9,7 @@
 #include <display_internal.h>
 #include <display_widgets.h>
 #include <epd_panel_rev.h>
+#include <epd_ram_diag.h>
 #include <jpeg_render.h>
 #include <png_render.h>
 #include <power.h>
@@ -94,7 +95,12 @@ bool display_update_epaper(int refreshMode, bool wait, bool writePlane, uint8_t 
   } else if (refreshMode == REFRESH_PARTIAL) {
     Log_info("Have valid previous image in EPD memory, doing partial refresh");
   }
+  epd_diag_readback("pre-refresh"); // EPD_RAM_DIAG builds only: RAM as written, before the update
   bbep.refresh(refreshMode, wait);
+  if (wait) {
+    epd_diag_readback("post-refresh"); // RAM after the init sequence + update
+  }
+  epd_diag_end();
     // The next update can be a partial update because the current is 1-bpp and stays in the EPD RAM
   bCanDoPartial = (bbep.getPanelType() == dpList[pDevice->panel_set][iTempProfile].OneBit);
   return true;
