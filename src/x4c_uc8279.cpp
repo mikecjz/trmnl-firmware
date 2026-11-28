@@ -27,7 +27,9 @@
 //     DRF 0x12, wait BUSY, PTOUT 0x92, POF 0x02, wait BUSY
 //
 // The partial drive only moves pixels whose DTM1/DTM2 bit differs, so the
-// glass never flashes; the PTL window additionally narrows the gate scan.
+// glass never flashes; the PTL window additionally narrows the gate scan. The
+// window always spans the full width (x 0..799): a narrower one leaves the
+// columns at its right edge undriven (TRMN-54).
 //
 // BUSY is idle-HIGH; a full refresh holds it low for about 1.24 s, a whole-panel
 // DU partial for about 0.55 s, and a narrow window proportionally less.
@@ -379,8 +381,16 @@ X4cPartialResult x4c_uc8279_partial_update(uint8_t *fb, const uint8_t *prev_png,
     return X4cPartialResult::Done;
   }
 
-  const uint16_t x0 = prev.x;
-  const uint16_t x1 = static_cast<uint16_t>(prev.x + prev.w - 1);
+  // The PTL window spans every column; only the rows come from the diff.
+  // A window that ends mid-panel leaves its rightmost columns undriven on this
+  // controller (TRMN-54): the frame is marked painted, the stale pixels never
+  // differ again in DTM1/DTM2, and a strip of the old image stays at the
+  // window's right edge (x 744-767 on the Space Station tile, where the map's
+  // diff boxes end) until the next full flash. Columns outside the changed
+  // pixels cost nothing: DU only drives pixels whose DTM1/DTM2 bits differ, and
+  // the drive time follows the row span, not the width.
+  const uint16_t x0 = 0;
+  const uint16_t x1 = static_cast<uint16_t>(width - 1);
   const uint16_t y0 = static_cast<uint16_t>(kGateOffset + prev.y);
   const uint16_t y1 = static_cast<uint16_t>(kGateOffset + prev.y + prev.h - 1);
 
@@ -434,11 +444,11 @@ X4cPartialResult x4c_uc8279_partial_update(uint8_t *fb, const uint8_t *prev_png,
   SPI.endTransaction();
 
   const bool ok = ponOk && drfOk && pofOk;
-  out("UC8279 frame: mode=DU win=%ux%u@(%u,%u) upload=%ums decode=%ums pon=%ums(%s) drop=%s drf=%ums(%s) "
+  out("UC8279 frame: mode=DU win=%ux%u@(%u,%u) ptl=x%u-%u upload=%ums decode=%ums pon=%ums(%s) drop=%s drf=%ums(%s) "
       "pof=%ums(%s) total=%ums",
-      (unsigned)prev.w, (unsigned)prev.h, (unsigned)prev.x, (unsigned)prev.y, (unsigned)uploadMs, (unsigned)decodeMs,
-      (unsigned)ponMs, ponOk ? "ok" : "TIMEOUT", dropped ? "yes" : "NO", (unsigned)drfMs, drfOk ? "ok" : "TIMEOUT",
-      (unsigned)pofMs, pofOk ? "ok" : "TIMEOUT", (unsigned)(millis() - t0));
+      (unsigned)prev.w, (unsigned)prev.h, (unsigned)prev.x, (unsigned)prev.y, (unsigned)x0, (unsigned)x1,
+      (unsigned)uploadMs, (unsigned)decodeMs, (unsigned)ponMs, ponOk ? "ok" : "TIMEOUT", dropped ? "yes" : "NO",
+      (unsigned)drfMs, drfOk ? "ok" : "TIMEOUT", (unsigned)pofMs, pofOk ? "ok" : "TIMEOUT", (unsigned)(millis() - t0));
   if (ok) {
     noteFrameHash(new_hash);
     return X4cPartialResult::Done;
